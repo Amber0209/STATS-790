@@ -1,0 +1,112 @@
+---
+title: "Simulation"
+output: html_document
+date: "2025-03-22"
+---
+
+```{r setup, include=FALSE}
+source("tomgro.r")
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+# Define candidate values for temperature, light intensity, manure, and plant type
+temps <- seq(16, 32, by = 2) # 16, 18, ..., 32
+ppfd_vals <- seq(100, 2000, by = 100) 
+manures <- seq(0, 100, by = 10) # 0, 10, ..., 100
+plant_types <- c("cherry", "heirloom")  
+
+# Create a full parameter grid for all combinations
+param_grid <- expand.grid(
+  T_mean = temps,
+  PPFD_mean = ppfd_vals,
+  percent_manure = manures,
+  plant_type = plant_types
+)
+
+# Show the first few rows of the parameter grid
+head(param_grid)
+```
+
+
+```{r}
+# Apply the tomgro_single function to each parameter combination and combine results into one data frame
+results <- do.call(rbind, apply(param_grid, 1, function(row){
+  tomgro_single(T_mean = as.numeric(row["T_mean"]),
+                PPFD_mean = as.numeric(row["PPFD_mean"]),
+                percent_manure = as.numeric(row["percent_manure"]),
+                plant_type = as.character(row["plant_type"]))
+}))
+
+```
+
+
+```{r, warning=FALSE}
+# Visualize temperature response of fruit dry weight by tomato type
+ggplot(results, aes(x = T_mean, y = fruit_dry_weight, color = plant_type)) +
+  geom_point(alpha = 0.2) + 
+  geom_smooth(method = "loess", se = FALSE, size = 1.2) +  
+  geom_vline(xintercept = c(22, 26), linetype = "dashed", color = "darkred") + 
+  labs(
+    title = "Temperature Response of Fruit Dry Weight by Tomato Type",
+    x = "Temperature (°C)",
+    y = "Fruit Dry Weight (g/m²)",
+    color = "Tomato Type"
+  ) +
+  theme_minimal()  
+```
+
+```{r}
+# Visualize effect of PPFD on fruit dry weight by tomato type
+ggplot(results, aes(x = PPFD_mean, y = fruit_dry_weight, color = plant_type)) +
+  geom_point(alpha = 0.5) + 
+  geom_smooth(method = "loess", se = FALSE, size = 1.2) +  
+  labs(
+    title = "PPFD Effect on Fruit Dry Weight by Tomato Type",
+    x = "PPFD (μmol/m²/s)",
+    y = "Fruit Dry Weight (g/m²)",
+    color = "Tomato Type"
+  ) +
+  theme_minimal()  
+
+```
+
+```{r}
+# Visualize effect of manure percentage on fruit dry weight by tomato type
+ggplot(results, aes(x = percent_manure, y = fruit_dry_weight, color = plant_type)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.2) +
+  labs(
+    title = "Fertilizer Effect on Fruit Dry Weight by Tomato Type",
+    x = "Manure Percentage (%)",
+    y = "Fruit Dry Weight (g/m²)",
+    color = "Tomato Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+```{r}
+# Compute mean fruit dry weight by plant type, temperature, and PPFD
+heatdata <- results %>%
+  group_by(plant_type, T_mean, PPFD_mean) %>%
+  summarise(mean_dry = mean(fruit_dry_weight, na.rm = TRUE))
+
+# Visualize the average fruit dry weight as a heatmap by temperature and PPFD, faceted by plant type
+ggplot(heatdata, aes(x = factor(T_mean), y = factor(PPFD_mean), fill = mean_dry)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "C") +
+  facet_wrap(~plant_type)+
+  labs(title = "Average Fruit Dry Weight under Different Temperature and PPFD",
+       x = "Temperature (°C)",
+       y = "PPFD (μmol/m²/s)",
+       fill = "Avg Fruit Dry\nWeight (g/m²)") +
+  theme_minimal()
+
+```
+
