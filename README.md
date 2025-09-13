@@ -33,13 +33,6 @@ This R Markdown file documents the process of generating feedback for student ex
 - Translates diagnostic results into **student-friendly suggestions**, linking statistical efficiency losses to concrete greenhouse factors (fertilizer, temperature, light, plant type).  
 - Demonstrates the end-to-end feedback pipeline, from input design to optimality computation and final suggestions, with flowcharts and worked examples.  
 
-## Getting Started
-
-1. Clone this repository and open it in RStudio.  
-2. Install required R packages if needed (e.g., `tidyverse`, `ggplot2`, `dplyr`, `MuMIn`).  
-3. Knit the R Markdown files to generate HTML reports with interactive plots and results.  
-
----
 
 ## Getting Started
 
