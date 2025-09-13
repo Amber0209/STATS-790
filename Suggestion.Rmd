@@ -1,0 +1,850 @@
+---
+title: "Suggestion"
+author: "Yan"
+date: "2025-06-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("tomgro.r")
+library(edibble)
+library(magrittr)
+library(tibble)
+library(dplyr)
+library(MuMIn)
+library(tidyr) 
+library(rpart)
+library(rpart.plot)
+library(AlgDesign)
+library(ggplot2)
+library(purrr)
+load("formula.RData")
+load("golden_df.RData")
+load("golden_optimality.RData")
+load("simulation_design.RData")
+load("env_data.RData")
+```
+
+```{r}
+# Display the formula for the mixed type model
+best_formula
+```
+
+```{r}
+# Display the formula for the best cherry model
+formula_cherry
+```
+
+```{r}
+# Display the formula for the best heirloom model
+formula_heirloom
+```
+
+```{r}
+# Define a helper function to clean a data frame
+.prepare_df <- function(df) {
+  # Keep only rows where both percent_manure and plant_type are not missing
+  df[!is.na(df$percent_manure) & !is.na(df$plant_type), , drop = FALSE]
+}
+
+```
+
+
+```{r}
+# Function to compute the D-optimality (log-determinant per parameter) for a given design and formula
+compute_d_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
+  model_matrix <- model.matrix(formula, data = design_df)
+  XtX <- crossprod(model_matrix)  
+  p <- ncol(model_matrix)        
+
+  log_det <- determinant(XtX, logarithm = TRUE)$modulus
+  d_opt <- log_det / p     
+
+  return(as.numeric(d_opt))
+}
+```
+
+```{r}
+# Function to compute A-optimality (average variance of parameter estimates) for a given design and formula
+compute_a_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
+  model_matrix <- model.matrix(formula, data = design_df)
+  XtX <- crossprod(model_matrix)
+  p <- ncol(model_matrix)
+  inv_XtX <- solve(XtX)
+  a_opt <- sum(diag(inv_XtX)) / p  
+
+  return(as.numeric(a_opt))
+}
+```
+
+```{r}
+# Function to compute G-optimality (maximum prediction variance) for a given design and formula
+compute_g_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
+  model_matrix <- model.matrix(formula, data = design_df)
+  XtX <- crossprod(model_matrix)
+  inv_XtX <- solve(XtX)
+
+  pred_vars <- rowSums((model_matrix %*% inv_XtX) * model_matrix) 
+  g_opt <- max(pred_vars) 
+
+  return(as.numeric(g_opt))
+}
+```
+
+
+```{r}
+#' Compare D-optimality and coefficient variances between two experimental designs
+#'
+#' @param student_df Data frame of the student (candidate) design
+#' @param golden_df  Data frame of the golden standard (reference) design
+#' @param formula    Model formula to specify the design matrix
+#' @return           A list containing normalized D-optimality values, 
+#'                   coefficient variances, and the variance ratio for each parameter
+compare_d_optimality_info <- function(student_df, golden_df, formula) {
+  student_df <- .prepare_df(student_df)
+  golden_df  <- .prepare_df(golden_df)
+  # Construct model (design) matrices for both designs
+  X_student <- model.matrix(formula, data = student_df)
+  X_golden  <- model.matrix(formula, data = golden_df)
+  p <- ncol(X_student)  # Number of model parameters (should be same for both)
+  
+  # Calculate D-optimality (scaled log-determinant of the information matrix)
+  # D-optimality reflects the overall "information content" of the design
+  d_opt_student <- as.numeric(determinant(crossprod(X_student), logarithm = TRUE)$modulus / p)
+  d_opt_golden  <- as.numeric(determinant(crossprod(X_golden),  logarithm = TRUE)$modulus / p)
+  
+  # Calculate the coefficient variance for each parameter
+  # (Diagonal of the inverse of the information matrix)
+  cov_student <- solve(crossprod(X_student))
+  cov_golden  <- solve(crossprod(X_golden))
+  var_student <- diag(cov_student)
+  var_golden  <- diag(cov_golden)
+  names(var_student) <- colnames(X_student)
+  names(var_golden)  <- colnames(X_golden)
+  
+  # Compute the variance ratio (student / golden) for each parameter
+  var_ratio <- var_student / var_golden
+  
+  # Return all results as a named list for further inspection 
+  list(
+    D_optimality_student = d_opt_student,             # D-optimality for student design
+    D_optimality_golden  = d_opt_golden,              # D-optimality for golden design
+    CoefficientVariance_student = var_student,        # Variance for each parameter (student)
+    CoefficientVariance_golden  = var_golden,         # Variance for each parameter (golden)
+    VarianceRatio = var_ratio                        # Variance ratio (student/golden) for each parameter
+  )
+}
+
+```
+
+```{r}
+#' Compare A-optimality and coefficient variances between two experimental designs
+#'
+#' @param student_df Data frame of the student (candidate) design
+#' @param golden_df  Data frame of the golden standard (reference) design
+#' @param formula    Model formula to specify the design matrix
+#' @return           A list containing A-optimality values, 
+#'                   coefficient variances, and the variance ratio for each parameter
+compare_a_optimality_info <- function(student_df, golden_df, formula) {
+  student_df <- .prepare_df(student_df)
+  golden_df  <- .prepare_df(golden_df)
+  # Construct model (design) matrices for both designs
+  X_student <- model.matrix(formula, data = student_df)
+  X_golden  <- model.matrix(formula, data = golden_df)
+  
+  # Calculate the coefficient variance for each parameter
+  # (Diagonal elements of the inverse information matrix)
+  cov_student <- solve(crossprod(X_student))
+  cov_golden  <- solve(crossprod(X_golden))
+  var_student <- diag(cov_student)
+  var_golden  <- diag(cov_golden)
+  names(var_student) <- colnames(X_student)
+  names(var_golden)  <- colnames(X_golden)
+  
+  # Calculate A-optimality: mean variance of the parameter estimates
+  # (Lower values indicate greater average precision)
+  a_opt_student <- mean(var_student)
+  a_opt_golden  <- mean(var_golden)
+  
+  # Compute the variance ratio (student / golden) for each parameter
+  var_ratio <- var_student / var_golden
+  
+  # Return all results as a named list for further analysis or reporting
+  list(
+    A_optimality_student = a_opt_student,              # Mean variance for student design
+    A_optimality_golden  = a_opt_golden,               # Mean variance for golden design
+    CoefficientVariance_student = var_student,         # Variance for each parameter (student)
+    CoefficientVariance_golden  = var_golden,          # Variance for each parameter (golden)
+    VarianceRatio = var_ratio                          # Variance ratio (student/golden) for each parameter
+  )
+}
+```
+
+```{r}
+#' Compare G-optimality and prediction variances between two experimental designs
+#'
+#' @param student_df Data frame of the student (candidate) design
+#' @param golden_df  Data frame of the golden standard (reference) design
+#' @param formula    Model formula to specify the design matrix
+#' @return           A list containing G-optimality values, 
+#'                   prediction variances for each design point, and the variance ratio
+compare_g_optimality_info <- function(student_df, golden_df, formula) {
+  student_df <- .prepare_df(student_df)
+  golden_df  <- .prepare_df(golden_df)
+  # Construct model (design) matrices for both designs
+  X_student <- model.matrix(formula, data = student_df)
+  X_golden  <- model.matrix(formula, data = golden_df)
+  
+  # Compute the inverse information (covariance) matrix for each design
+  cov_student <- solve(crossprod(X_student))
+  cov_golden  <- solve(crossprod(X_golden))
+  
+  # Calculate prediction variance for each observation (design point)
+  # This is the diagonal of: X %*% covariance %*% t(X)
+  predvar_student <- rowSums((X_student %*% cov_student) * X_student)
+  predvar_golden  <- rowSums((X_golden  %*% cov_golden ) * X_golden )
+  
+  # Compute G-optimality (maximum prediction variance across all design points)
+  # Lower values indicate better (more uniform) predictive performance
+  g_opt_student <- max(predvar_student)
+  g_opt_golden  <- max(predvar_golden)
+  
+  # Compute the ratio of prediction variances at each design point
+  predvar_ratio <- predvar_student / predvar_golden
+  names(predvar_student) <- rownames(X_student)
+  names(predvar_golden)  <- rownames(X_golden)
+  names(predvar_ratio)   <- rownames(X_student)
+  
+  # Return all results as a named list for further analysis or reporting
+  list(
+    G_optimality_student = g_opt_student,                   # G-optimality for student design
+    G_optimality_golden  = g_opt_golden,                    # G-optimality for golden design
+    PredictionVariance_student = predvar_student,           # Prediction variance for each point (student)
+    PredictionVariance_golden  = predvar_golden,            # Prediction variance for each point (golden)
+    PredictionVarianceRatio = predvar_ratio                 # Prediction variance ratio (student/golden) for each point
+  )
+}
+
+```
+
+
+```{r}
+# Store lists of 1000 candidate designs for each scenario (cherry-only, heirloom-only, mixed)
+all_designs <- list(
+  "cherry-only"   = cherry_designs,
+  "heirloom-only" = heirloom_designs,
+  "mixed"         = mixed_designs
+)
+
+# Store scenario-specific model formula and golden standard design for comparison
+scenario_info <- list(
+  "cherry-only"   = list(formula = formula_cherry,   golden_df = golden_cherry_df$design),
+  "heirloom-only" = list(formula = formula_heirloom, golden_df = golden_heirloom_df$design),
+  "mixed"         = list(formula = best_formula,     golden_df = golden_mixed_df$design)
+)
+
+# Initialize an empty list to store results for each scenario
+optimality_results <- list()
+
+# Loop over each experimental scenario
+for (scenario_name in names(all_designs)) {
+  formula   <- scenario_info[[scenario_name]]$formula   # Get the relevant model formula
+  golden_df <- scenario_info[[scenario_name]]$golden_df # Get the golden standard design
+  design_list <- all_designs[[scenario_name]]           # Get the list of candidate designs
+  
+  n_designs <- length(design_list)
+  scenario_opt_list <- vector("list", n_designs)        # Prepare a list to hold all results for this scenario
+  
+  # Loop over all candidate designs for this scenario
+  for (i in seq_len(n_designs)) {
+    this_design <- design_list[[i]]
+    
+    # Compare the candidate design to the golden standard using D-, A-, and G-optimality
+    # Robustly handle any numerical or singularity errors by returning NA on failure
+    d_info <- tryCatch(compare_d_optimality_info(this_design, golden_df, formula), error = function(e) NA)
+    a_info <- tryCatch(compare_a_optimality_info(this_design, golden_df, formula), error = function(e) NA)
+    g_info <- tryCatch(compare_g_optimality_info(this_design, golden_df, formula), error = function(e) NA)
+    
+    # If all three comparisons succeed, compute optimality efficiency metrics
+    if (is.list(d_info) && is.list(a_info) && is.list(g_info)) {
+      # D-optimality efficiency: relative "information content" (higher is better)
+      D_eff <- exp(d_info$D_optimality_student - d_info$D_optimality_golden) * 100
+      # A-optimality efficiency: relative mean variance (higher is better, as denominator is student)
+      A_eff <- a_info$A_optimality_golden / a_info$A_optimality_student * 100
+      # G-optimality efficiency: relative max prediction variance (higher is better, as denominator is student)
+      G_eff <- g_info$G_optimality_golden / g_info$G_optimality_student * 100
+      
+      scenario_opt_list[[i]] <- list(
+        D = d_info,
+        A = a_info,
+        G = g_info,
+        Efficiency = list(
+          D_efficiency = D_eff,
+          A_efficiency = A_eff,
+          G_efficiency = G_eff
+        )
+      )
+    } else {
+      # If any comparison fails, record NAs for all efficiency metrics
+      scenario_opt_list[[i]] <- list(
+        D = d_info,
+        A = a_info,
+        G = g_info,
+        Efficiency = list(
+          D_efficiency = NA,
+          A_efficiency = NA,
+          G_efficiency = NA
+        )
+      )
+    }
+  }
+  # Store all results for this scenario in the main results list
+  optimality_results[[scenario_name]] <- scenario_opt_list
+}
+
+```
+
+
+```{r}
+# Inspect the results of the 5th cherry-only candidate design
+result_example <- optimality_results[["cherry-only"]][[12]]
+result_example
+```
+
+
+```{r}
+# Check the optimality efficiency
+result_example$Efficiency
+```
+```{r}
+# # Format a number as a percentage string with specified decimal digits
+# percent_fmt <- function(x, digits = 1) sprintf("%.*f%%", digits, x)
+# 
+# # Summarize efficiency values into a feedback message
+# summarise_efficiency_header <- function(opt_result) {
+#   # Extract D-, A-, and G-efficiency values from the result object
+#   D_eff <- opt_result$Efficiency$D_efficiency
+#   A_eff <- opt_result$Efficiency$A_efficiency
+#   G_eff <- opt_result$Efficiency$G_efficiency
+#   
+#   # Construct a feedback string reporting efficiency values as percentages
+#   paste0(
+#     "Your design achieved ", percent_fmt(D_eff), " (D), ",
+#     percent_fmt(A_eff), " (A), and ", percent_fmt(G_eff), " (G) efficiency ",
+#     "relative to the reference."
+#   )
+# }
+# 
+# # Example: generate an efficiency feedback message for one design
+# summarise_efficiency_header(result_example)
+
+```
+
+
+
+```{r}
+#png("D_optimality_variance_ratio.png", width = 800, height = 600, res = 120)
+op <- par(no.readonly = TRUE)
+par(mar=c(5, 16, 4, 2)) 
+# Create a horizontal barplot of the D-optimality variance ratios (student design / golden standard)
+barplot(result_example$D$VarianceRatio, horiz=TRUE, las=1, col="#1f77b4",
+        main="D-optimality Variance Ratio (Student / Golden)", xlab="Variance Ratio")
+abline(v=1.5, col="red", lty=2)
+par(op)
+#dev.off()
+```
+
+```{r}
+#png("A_optimality_variance_ratio.png", width = 800, height = 600, res = 120)
+op <- par(no.readonly = TRUE)
+par(mar=c(5, 16, 4, 2))  
+# Extract the variance ratio vector for each coefficient (student / golden)
+var_ratio <- result_example$A$VarianceRatio
+# Create a horizontal barplot of the A-optimality coefficient variance ratios
+barplot(var_ratio, horiz = TRUE, las = 1, col = "#1f77b4",
+        main = " A-optimality Variance Ratio (Student / Golden)", xlab = "Variance Ratio")
+abline(v = 1.5, col = "red", lty = 2)
+par(op)
+#dev.off()
+```
+
+```{r}
+# Extract the fifth cherry-only design from the list
+df <- cherry_designs[[12]]
+
+# Create a factor for fertilizer level, with "Empty" for unused plots
+# - ifelse: set to "Empty" if percent_manure is NA; otherwise, use manure value as string
+# - levels: ensures consistent order for legend and plotting
+manure_levels <- sort(unique(na.omit(df$percent_manure)))
+
+df$manure_tile <- ifelse(is.na(df$percent_manure), "Empty", as.character(df$percent_manure))
+tile_levels <- c(as.character(manure_levels), "Empty")
+df$manure_tile <- factor(df$manure_tile, levels = tile_levels)
+
+cols <- setNames(
+  colorRampPalette(c("#4575b4", "#fee090", "#d73027"))(length(manure_levels)),
+  as.character(manure_levels)
+)
+cols[["Empty"]] <- "white"
+
+#png("Field_Layout.png", width = 800, height = 600, res = 120)
+# Plot field layout using ggplot2
+ggplot(df, aes(x = col, y = row, fill = manure_tile)) +
+  geom_tile(color = "grey30", linewidth = 0.5) +
+  scale_y_reverse(breaks = 1:7, expand = c(0, 0)) +
+  scale_x_continuous(breaks = 1:7, expand = c(0, 0)) +
+  scale_fill_manual(values = cols, name = "Manure (%)", drop = FALSE) +
+  labs(title = "Field Layout: Fertilizer Treatments", x = "Column", y = "Row") +
+  coord_fixed() +
+  theme_minimal(base_size = 15) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(face = "bold"),
+    legend.position = "right"
+  )
+#dev.off()
+```
+
+```{r}
+# Create a barplot of the G-optimality prediction variance ratios (student design / golden standard) for all design points
+#png("Prediction_variance_ratio.png", width = 800, height = 600, res = 120)
+barplot(result_example$G$PredictionVarianceRatio, horiz=FALSE, las=2, col="#1f77b4",
+        main="Prediction Variance Ratio (Student / Golden)", ylab="Variance Ratio",
+        names.arg = names(result_example$G$PredictionVarianceRatio), cex.names = 0.6)
+abline(h=1.5, col="red", lty=2)
+#dev.off()
+```
+
+```{r}
+#' Main function: generate feedback for a student design
+#'
+#' This function takes the optimality results for one student design,
+#' compares them with the gold standard, and generates tailored feedback messages. 
+#' Feedback is based on efficiency thresholds (80%) and uses helper functions 
+#' for D/A- and G-optimality. 
+#'
+#' @param result     A list containing optimality results for the student design 
+#'                   (with D, A, G components and Efficiency scores).
+#' @param student_df Data frame of the student design (needed for G-optimality feedback).
+#' @param env_data   Environmental data for the greenhouse (needed for G-optimality feedback).
+#' @return           A character vector of feedback messages, each line as one element.
+
+generate_design_feedback <- function(result, student_df = NULL, env_data = NULL) {
+  
+  # --- Step 1: Extract efficiency scores from the result
+  D_eff <- result$Efficiency$D_efficiency
+  A_eff <- result$Efficiency$A_efficiency
+  G_eff <- result$Efficiency$G_efficiency
+  
+  # --- Step 2: Define pass/fail flags for each criterion (threshold = 80%)
+  D_ok <- D_eff >= 80
+  A_ok <- A_eff >= 80
+  G_ok <- G_eff >= 80
+  
+  # --- Step 3: If all three criteria are satisfied, return positive reinforcement
+  if (D_ok && A_ok && G_ok) {
+    return("Awesome job! Your design looks really strong in every way. Keep going!")
+  }
+  
+  # --- Step 4: Collect targeted feedback messages
+  messages <- character(0)
+  
+  # --- D/A feedback: if either D or A efficiency is below threshold
+  if (!D_ok || !A_ok) {
+    # Call helper function to generate factor-specific suggestions
+    da_suggestions <- generate_DA_design_feedback(result)
+    if (length(da_suggestions) > 0) {
+      da_msg <- paste(
+        "Suggestions for improving your experimental design:",
+        paste0("- ", da_suggestions, collapse = "\n"),
+        sep = "\n"
+      )
+      messages <- c(messages, da_msg)
+    }
+  }
+  
+  # --- G feedback: if G efficiency is below threshold
+  if (!G_ok) {
+    # Call helper function to identify isolated plots and generate suggestions
+    g_suggestion <- generate_G_design_feedback(result, student_df, env_data)
+    if (length(g_suggestion) > 0) {
+      g_msg <- paste(
+        "A few spots are a bit lonely. Try giving them a buddy to make comparisons clearer.",
+        "Affected plots:",
+        paste0("- ", g_suggestion, collapse = "\n"),
+        sep = "\n"
+      )
+      messages <- c(messages, g_msg)
+    } 
+  }
+  
+  # --- Step 5: Return combined feedback
+  if (length(messages) == 0) {
+    # Case: efficiencies are below threshold but no specific issues flagged
+    return("Thanks for your design! No specific issues were flagged under the current rules.")
+  } else {
+    # Combine all feedback messages, split into separate lines for readability
+    full_text <- paste(messages, collapse = "\n\n")
+    return(strsplit(full_text, "\n")[[1]])
+  }
+}
+
+```
+
+
+```{r}
+#' Generate D/A-optimality feedback based on coefficient variance ratios
+#'
+#' This function inspects the variance ratios for coefficients in a student's design
+#' compared to the gold standard. It identifies which factors (fertilizer, temperature,
+#' light, plant type, or their interactions) are weakly supported, and generates
+#' tailored feedback messages. The messages differ depending on whether the main
+#' issue lies in coverage (D-efficiency) or replication (A-efficiency).
+#'
+#' @param opt_result   A single design's optimality result (from optimality_results[[...]][[i]]).
+#' @param threshold    Cut-off above which a variance ratio is flagged as problematic (default = 1.3).
+#' @return             A character vector of feedback suggestions, or NULL if no issues detected.
+
+generate_DA_design_feedback <- function(opt_result, threshold = 1.3) {
+  
+  # --- Step 1: Extract variance ratios and identify flagged variables
+  var_ratio <- opt_result$D$VarianceRatio
+  flagged_vars <- names(var_ratio[var_ratio > threshold])  # coefficients with poor precision
+  
+  # Group variables into categories for easier interpretation
+  fertilizer_related  <- any(c("percent_manure", "I(percent_manure^2)") %in% flagged_vars)
+  temperature_related <- any(c("temperature", "I(temperature^2)") %in% flagged_vars)
+  ppfd_related        <- "PPFD" %in% flagged_vars
+  plant_related       <- "plant_type" %in% flagged_vars
+  
+  # Map interaction terms to simplified factor pairs for user-friendly feedback
+  interaction_mapping <- list(
+    "percent_manure:plant_type"       = "fertilizer:plant type",
+    "I(percent_manure^2):plant_type"  = "fertilizer:plant type",
+    "percent_manure:temperature"      = "fertilizer:temperature",
+    "I(percent_manure^2):temperature" = "fertilizer:temperature",
+    "percent_manure:PPFD"             = "fertilizer:light",
+    "I(percent_manure^2):PPFD"        = "fertilizer:light",
+    "plant_type:temperature"          = "plant type:temperature",
+    "plant_type:PPFD"                 = "plant type:light",
+    "temperature:PPFD"                = "temperature:light"
+  )
+  flagged_interactions     <- intersect(names(interaction_mapping), flagged_vars)
+  simplified_interactions  <- unique(unlist(interaction_mapping[flagged_interactions]))
+  
+  # --- Step 2: Extract efficiency scores
+  D_eff <- opt_result$Efficiency$D_efficiency
+  A_eff <- opt_result$Efficiency$A_efficiency
+  
+  # Container for feedback messages
+  suggestions <- character(0)
+  
+  # --- Step 3: Efficiency-specific advice
+  # If D is fine but A is weak → suggest more replication
+  if (D_eff >= 80 && A_eff < 80) {
+    factors <- c()
+    if (fertilizer_related)  factors <- c(factors, "fertilizer")
+    if (temperature_related) factors <- c(factors, "temperature")
+    if (ppfd_related)        factors <- c(factors, "light")
+    
+    if (length(factors) > 0) {
+      factor_text <- paste(factors, collapse = " and ")
+      return(paste0(
+        "Great variety in your design! A few more repeats in ", factor_text,
+        " would make it even stronger."
+      ))
+    } 
+  }
+  
+  # If A is fine but D is weak → suggest wider coverage
+  if (A_eff >= 80 && D_eff < 80) {
+    factors <- c()
+    if (fertilizer_related)  factors <- c(factors, "fertilizer")
+    if (temperature_related) factors <- c(factors, "temperature")
+    if (ppfd_related)        factors <- c(factors, "light")
+    
+    if (length(factors) > 0) {
+      factor_text <- paste(factors, collapse = " and ")
+      return(paste0(
+        "Your design is nice and steady! Next time, try exploring a wider ",
+        factor_text, " range of conditions."
+      ))
+    }
+  }
+  
+  # --- Step 4: Helper for interaction-related feedback
+  make_interaction_suggestion <- function(interactions) {
+    if (length(interactions) == 0) return(NULL)
+    
+    if (length(interactions) == 1) {
+      # If only one flagged, describe it directly
+      parts <- strsplit(interactions, ":")[[1]]
+      return(sprintf(
+        "Not many different pairings of %s and %s showed up. A bit more variety could make the design stronger.",
+        parts[1], parts[2]
+      ))
+    }
+    # If multiple, pick one example to mention
+    chosen <- sample(interactions, 1)
+    parts  <- strsplit(chosen, ":")[[1]]
+    return(sprintf(
+      "Not many different pairings of %s and %s showed up. A bit more variety could make the design stronger.",
+      parts[1], parts[2]
+    ))
+  }
+  
+  # Generate feedback for flagged interactions
+  interaction_suggestions <- character(0)
+  if (length(flagged_interactions) > 0) {
+    interaction_suggestions <- make_interaction_suggestion(flagged_interactions)
+  }
+  
+  # --- Step 5: High-level factor-based feedback
+  if (fertilizer_related) {
+    suggestions <- c(suggestions,
+      "Looks like your design didn’t really explore the fertilizer space — maybe next round, give it a wider adventure."
+    )
+  }
+  
+  if (temperature_related) {
+    suggestions <- c(suggestions,
+      "Temperature variation came out a little narrow. No worries — next time you can explore both cooler and warmer spots for stronger results."
+    )
+  }
+  
+  if (ppfd_related) {
+    suggestions <- c(suggestions,
+      "Looks like light didn’t get much variety this time — with a broader mix, your design would gain strength."
+    )
+  }
+  
+  if (plant_related) {
+    suggestions <- c(suggestions,
+      "The balance between plant types leaned to one side. Easy fix — next round, give both cherry and heirloom a fair chance to shine."
+    )
+  }
+  
+  if (length(interaction_suggestions) > 0) {
+    suggestions <- c(suggestions, interaction_suggestions)
+  }
+  
+  # --- Step 6: Limit the number of suggestions to avoid overwhelming the student
+  if (length(suggestions) > 3) {
+    suggestions <- suggestions[sample(seq_along(suggestions), 3)]
+  }
+  
+  return(suggestions)
+}
+
+```
+
+
+
+```{r}
+#' Generate G-optimality feedback based on isolated weak tiles
+#'
+#' This function identifies specific plots in the student design that have 
+#' unusually high prediction variance compared to the gold standard (weak G-optimality).
+#' It checks whether these weak points are isolated (rare combinations of factors) 
+#' and generates suggestions encouraging broader coverage or replication.
+#'
+#' @param opt_result  G-optimality result (must include PredictionVarianceRatio).
+#' @param student_df  Data frame of the student design (must include plant_type, row, col, etc.).
+#' @param env_data    Environmental data for temperature and PPFD, used to create buckets.
+#' @param threshold   Cut-off for weak prediction variance ratios (default = 1.3).
+#' @param k_isolated  Maximum number of repeats allowed before a combination is considered isolated (default = 2).
+#' @param top_n       Maximum number of isolated weak spots to report (default = 3).
+#'
+#' @return A character vector describing the affected plots (location + conditions),
+#'         or a simple message if no issues are found.
+
+generate_G_design_feedback <- function(opt_result, student_df, env_data,
+                                       threshold = 1.3, k_isolated = 2, top_n = 3) {
+  # --- Step 1: Extract prediction variance ratios (student vs gold)
+  pred_ratio <- opt_result$G$PredictionVarianceRatio
+  
+  # Match variance ratios back to the student design rows
+  idx <- suppressWarnings(as.integer(names(pred_ratio)))
+  df <- student_df[idx, , drop = FALSE]
+  df$pred_ratio <- as.numeric(pred_ratio)
+  
+  # Keep only plots with planted treatments and weak prediction quality
+  df <- df[!is.na(df$percent_manure) & df$pred_ratio > threshold, , drop = FALSE]
+  
+  # --- Step 2: Define bucket thresholds for temperature and PPFD (tertiles)
+  tq <- quantile(env_data$temperature, probs = c(.33, .66), na.rm = TRUE)
+  lq <- quantile(env_data$PPFD, probs = c(.33, .66), na.rm = TRUE)
+  
+  # Categorisation helpers (temperature, light, and manure into discrete bands)
+  bucket_temp <- function(x) cut(x, breaks = c(-Inf, tq[1], tq[2], Inf),
+                                 labels = c("cool", "mid", "warm"), include.lowest = TRUE)
+  bucket_ppfd <- function(x) cut(x, breaks = c(-Inf, lq[1], lq[2], Inf),
+                                 labels = c("low", "mid", "high"), include.lowest = TRUE)
+  bucket_manure <- function(m) cut(as.numeric(m),
+                                   breaks = c(-Inf, 0 + 1e-9, 25, 50, 75, 100 + 1e-9, Inf),
+                                   labels = c("very low", "low", "mid", "high", "very high", "NA"),
+                                   right = TRUE)
+  
+  # --- Step 3: Build combination keys (plant × manure × temperature × PPFD)
+  student_df$temp_band   <- bucket_temp(student_df$temperature)
+  student_df$ppfd_band   <- bucket_ppfd(student_df$PPFD)
+  student_df$manure_band <- bucket_manure(student_df$percent_manure)
+  
+  student_df$combo_key <- interaction(
+    student_df$plant_type,
+    student_df$manure_band,
+    student_df$temp_band,
+    student_df$ppfd_band,
+    drop = TRUE
+  )
+  
+  # Count how often each combination appears in the full student design
+  combo_counts <- table(student_df$combo_key)
+  
+  # --- Step 4: Assign buckets and check isolation for weak plots
+  df$temp_band   <- bucket_temp(df$temperature)
+  df$ppfd_band   <- bucket_ppfd(df$PPFD)
+  df$manure_band <- bucket_manure(df$percent_manure)
+  
+  df$combo_key <- interaction(
+    df$plant_type,
+    df$manure_band,
+    df$temp_band,
+    df$ppfd_band,
+    drop = TRUE
+  )
+  
+  # Mark weak plots that are isolated (combination appears ≤ k_isolated times)
+  df$combo_count <- as.integer(combo_counts[df$combo_key])
+  df$is_isolated <- df$combo_count <= k_isolated
+  df$plot_name   <- paste0("R", df$row, "C", df$col)
+  
+  isolated_df <- df[df$is_isolated, ]
+  
+  # --- Step 5: If no isolated weak plots found, return generic advice
+  if (nrow(isolated_df) == 0) {
+    return("Looks good overall. If you make changes, try spreading things out a little more instead of repeating the same spot.")
+  }
+  
+  # --- Step 6: Prioritise the worst offenders
+  isolated_df <- isolated_df %>%
+    group_by(combo_key) %>%
+    slice_max(pred_ratio, n = 1) %>%  # keep the worst case per combination
+    ungroup() %>%
+    arrange(desc(pred_ratio)) %>%
+    head(top_n)  # only show top_n examples
+  
+  # --- Step 7: Create human-readable descriptions for affected plots
+  combo_descriptions <- apply(isolated_df, 1, function(row) {
+    paste0(row["plot_name"], ": ", row["plant_type"], ", ",
+           row["manure_band"], " fertilizer, ",
+           row["temp_band"], " temperature, ",
+           row["ppfd_band"], " light")
+  })
+  
+  # Final suggestion text (returned as vector of affected plot descriptions)
+  suggestion <- paste(
+    "A few spots are a bit lonely. Try giving them a buddy to make comparisons clearer.",
+    "Affected plots:",
+    paste0("- ", combo_descriptions, collapse = "\n"),
+    sep = "\n"
+  )
+  
+  return(combo_descriptions)
+}
+
+
+```
+
+
+
+```{r}
+generate_design_feedback(result_example, all_designs[["cherry-only"]][[12]], env_data)
+```
+
+```{r}
+# Safely extract the VarianceRatio vector from either D- or A-optimality results
+# Returns NULL if the structure is invalid or if names and values do not align
+get_var_ratio <- function(exp_result, comp = c("D", "A")) {
+  comp <- match.arg(comp)
+  if (!is.list(exp_result)) return(NULL)
+  slot <- exp_result[[comp]]
+  if (!is.list(slot)) return(NULL)
+  vr <- slot[["VarianceRatio"]]
+  if (is.null(vr)) return(NULL)
+  
+  v <- as.numeric(vr)
+  nm <- names(vr)
+  
+  # Ensure the vector has valid names attached
+  if (is.null(nm) || length(nm) != length(v)) return(NULL)
+  names(v) <- nm
+  return(v)
+}
+
+# Check whether the set of variables exceeding the threshold 
+# in D and A optimality are exactly the same
+# Returns 1 if fully matched, 0 if not matched, NA if incomplete
+check_DA_strict_match <- function(exp_result, threshold = 1.3) {
+  vD <- get_var_ratio(exp_result, "D")
+  vA <- get_var_ratio(exp_result, "A")
+  
+  if (is.null(vD) || is.null(vA)) return(NA_integer_)
+  
+  # Get names of variables that exceed the threshold
+  flagD <- sort(names(vD)[is.finite(vD) & vD > threshold])
+  flagA <- sort(names(vA)[is.finite(vA) & vA > threshold])
+  
+  # If both are empty, count as fully matched
+  if (length(flagD) == 0L && length(flagA) == 0L) return(1L)
+  
+  # Return 1 if they match exactly, else 0
+  if (identical(flagD, flagA)) return(1L) else return(0L)
+}
+
+# Analyze all designs within one scenario (e.g., "cherry-only")
+# Returns the number of valid designs and how many fully matched
+analyze_scenario <- function(design_list, threshold = 1.3) {
+  res <- sapply(design_list, check_DA_strict_match, threshold = threshold)
+  valid_idx <- which(!is.na(res))             # Only consider designs with complete D and A
+  n_valid   <- length(valid_idx)              # Number of valid designs
+  n_match   <- sum(res[valid_idx] == 1L)      # Number of fully matched designs
+  return(list(n_valid = n_valid, n_match = n_match))
+}
+
+# Main function to analyze all three scenarios: cherry, heirloom, and mixed
+# Outputs a data frame with counts and match rates
+analyze_all_scenarios <- function(optimality_results, threshold = 1.3) {
+  scenarios <- c("cherry-only", "heirloom-only", "mixed")
+  result <- data.frame(
+    scenario = scenarios,
+    total_valid = integer(length(scenarios)),
+    total_matched = integer(length(scenarios)),
+    match_rate = numeric(length(scenarios)),
+    stringsAsFactors = FALSE
+  )
+  
+  for (i in seq_along(scenarios)) {
+    sc <- scenarios[i]
+    designs <- optimality_results[[sc]]
+    out <- analyze_scenario(designs, threshold = threshold)
+    result$total_valid[i]   <- out$n_valid
+    result$total_matched[i] <- out$n_match
+    result$match_rate[i]    <- if (out$n_valid > 0) out$n_match / out$n_valid else NA_real_
+  }
+  
+  return(result)
+}
+
+# Set the threshold and run the full analysis
+threshold <- 1.3
+summary_result <- analyze_all_scenarios(optimality_results, threshold = threshold)
+
+# Print summary table
+print(summary_result)
+
+```
