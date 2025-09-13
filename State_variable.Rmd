@@ -1,0 +1,44 @@
+---
+title: "ExperimentalDesign"
+author: "Yan"
+date: "2025-09-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("tomgro.r")
+library(ggplot2)
+library(tidyr)
+```
+
+```{r}
+sim <- tomgro_single(
+  T_mean        = 28,       
+  PPFD_mean     = 150,      
+  percent_manure = 55,       
+  plant_type    = "cherry"   
+)
+colnames(sim)[5:9] <- c("W", "Wf", "Wm", "LAI", "N")
+sim$Day <- 1:nrow(sim)
+
+```
+
+```{r}
+plot_df <- sim %>%
+  pivot_longer(cols = c(W, Wf, Wm, LAI, N),
+               names_to = "Variable",
+               values_to = "Value")
+
+ggplot(plot_df, aes(x = Day, y = Value)) +
+  geom_line(color = "darkblue", size = 1) +
+  facet_wrap(~Variable, scales = "free_y") +
+  labs(
+    title = "Tomato Growth State Variables over 90 Days",
+    x = "Day",
+    y = "Value"
+  ) +
+  theme_minimal()
+
+```
+
