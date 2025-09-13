@@ -11,27 +11,26 @@ library(magrittr)
 library(tibble)
 library(dplyr)
 library(MuMIn)
+library(MASS)
 ```
 
 ```{r}
-# Create all combinations of manure percentage and plant type
-treatments <- expand.grid(
-  percent_manure = c(0, 25, 50, 75, 100),
-  plant_type = c("cherry", "heirloom")
-)
-
-# Repeat each treatment 5 times and assign a unique unit label
-design_df <- treatments[rep(1:nrow(treatments), each = 5), ] %>%
+# Construct a full-factorial design of experimental conditions.
+# - Manure percentage ranges from 0% to 100% in steps of 10%.
+# - Both tomato types (cherry and heirloom) are included.
+# - Temperature decreases from 28°C to 21°C across 7 evenly spaced levels.
+# - PPFD (light intensity) increases from 140 to 200 across 7 evenly spaced levels.
+# This generates every possible combination of these factors (a grid of treatments).
+#
+# A unique unit identifier ("P1", "P2", ...) is then assigned to each row,
+# representing an experimental plot or unit in the design.
+design_df <- expand.grid(
+  percent_manure = seq(0, 100, by = 10), 
+  plant_type = c("cherry", "heirloom"),
+  temperature = seq(28, 21, length.out = 7),
+  PPFD = seq(140, 200, length.out = 7)
+) %>%
   mutate(unit = paste0("P", 1:n()))
-
-set.seed(123) # Set random seed for reproducibility
-
-# Assign random temperature and light intensity to each unit
-design_df <- design_df %>%
-  mutate(
-    temperature = runif(n(), 25, 29),
-    light_intensity = runif(n(), 5000, 100000)
-  )
 
 ```
 
@@ -40,7 +39,7 @@ design_df <- design_df %>%
 results <- do.call(rbind, apply(design_df, 1, function(row){
   tomgro_single(
     T_mean = as.numeric(row["temperature"]),
-    PPFD_mean = as.numeric(row["light_intensity"]),
+    PPFD_mean = as.numeric(row["PPFD"]),
     percent_manure = as.numeric(row["percent_manure"]),
     plant_type = as.character(row["plant_type"])
   )
@@ -48,7 +47,7 @@ results <- do.call(rbind, apply(design_df, 1, function(row){
 
 # Rename columns to match original variable names
 names(results)[names(results) == "T_mean"] <- "temperature"
-names(results)[names(results) == "PPFD_mean"] <- "light_intensity"
+names(results)[names(results) == "PPFD_mean"] <- "PPFD"
 
 ```
 
@@ -61,10 +60,13 @@ results$plant_type <- as.factor(results$plant_type)
 cherry_data <- subset(results, plant_type == "cherry")
 
 # Fit a linear model with second-order and interaction terms
-model_cherry <- lm(fruit_dry_weight ~ (percent_manure + I(percent_manure^2) +
-                                       light_intensity +
-                                       temperature)^2,
-                   data = cherry_data )
+model_cherry <- lm(fruit_dry_weight ~ 
+                               percent_manure + I(percent_manure^2) +
+                               temperature + I(temperature^2) +
+                               PPFD +
+                               percent_manure:temperature + I(percent_manure^2):temperature +
+                               percent_manure:PPFD + I(percent_manure^2):PPFD +
+                               temperature:PPFD,data = cherry_data)
 
 options(na.action = "na.fail") # Set NA handling for model selection
 
@@ -84,10 +86,13 @@ summary(model.cherry.best.dredge)
 heirloom_data <- subset(results, plant_type == "heirloom")
 
 # Fit a linear model with second-order and interaction terms
-model_heirloom <- lm(fruit_dry_weight ~ (percent_manure + I(percent_manure^2) +
-                                         light_intensity +
-                                         temperature)^2,
-                     data = heirloom_data)
+model_heirloom <-lm(fruit_dry_weight ~ 
+                               percent_manure + I(percent_manure^2) +
+                               temperature + I(temperature^2) +
+                               PPFD +
+                               percent_manure:temperature + I(percent_manure^2):temperature +
+                               percent_manure:PPFD + I(percent_manure^2):PPFD +
+                               temperature:PPFD, data = heirloom_data)
 
 # Run model selection using dredge to find the best model
 model.heirloom.dredge <- dredge(model_heirloom)
@@ -130,21 +135,12 @@ formula_heirloom
 results$plant_type <- factor(results$plant_type, levels = c("cherry", "heirloom"))
 
 # Fit a full linear model including main effects, quadratic terms, two-way, and three-way interactions
-full_model <- lm(fruit_dry_weight ~ 
-                   percent_manure + plant_type + 
-                   temperature + light_intensity +
-                   I(percent_manure^2) + 
-                   I(temperature^2) + 
-                   I(light_intensity^2) +
-                   percent_manure:plant_type +
-                   percent_manure:temperature +
-                   percent_manure:light_intensity +
-                   plant_type:temperature +
-                   plant_type:light_intensity +
-                   temperature:light_intensity +
-                   percent_manure:plant_type:temperature +
-                   percent_manure:plant_type:light_intensity,
-                 data = results)
+full_model <- lm(fruit_dry_weight ~ plant_type * (percent_manure + temperature + PPFD)
+                     + I(percent_manure^2) * (plant_type + temperature + PPFD)
+                     + I(temperature^2)
+                     + temperature:PPFD,
+                     data = results)
+
 
 options(na.action = "na.fail") # Set NA handling for model selection
 
@@ -170,759 +166,365 @@ best_formula
 
 ```
 ```{r}
-# Fit the final model using the best formula and all data
-final_model <- lm(formula(model_best), data = results)
+# Save the model formulas for later use.
+save(
+  formula_heirloom,formula_cherry,best_formula,
+  file = "formula.RData"
+)
+```
 
-# Set up a 2x2 plotting area for diagnostic plots
-par(mfrow = c(2,2))
-
-# Plot diagnostic plots for the final model
-plot(final_model)
-
+```{r}
+# Define a helper function to clean input data frames.
+# The function removes any rows where manure percentage or plant type is missing (NA),
+# ensuring only complete and valid records are kept for analysis.
+.prepare_df <- function(df) {
+  df[!is.na(df$percent_manure) & !is.na(df$plant_type), , drop = FALSE]
+}
 ```
 
 ```{r}
 # Function to compute the D-optimality (log-determinant per parameter) for a given design and formula
 compute_d_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
   model_matrix <- model.matrix(formula, data = design_df)
-  XtX <- crossprod(model_matrix)  # Efficient calculation: t(X) %*% X
-  p <- ncol(model_matrix)         # Number of parameters
+  XtX <- crossprod(model_matrix)  
+  p <- ncol(model_matrix)        
 
-  # Compute log-determinant and normalize per parameter
   log_det <- determinant(XtX, logarithm = TRUE)$modulus
-  d_opt <- log_det / p            # Equivalent to log(det(X'X)^(1/p))
+  d_opt <- log_det / p     
 
   return(as.numeric(d_opt))
 }
-
-# Compute D-optimality for the best model, cherry model, and heirloom model
-best_D_opt <- compute_d_optimality(design_df, best_formula)
-best_D_cherry <- compute_d_optimality(cherry_data, formula_cherry)
-best_D_heirloom <- compute_d_optimality(heirloom_data, formula_heirloom)
 ```
 
 ```{r}
 # Function to compute A-optimality (average variance of parameter estimates) for a given design and formula
 compute_a_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
   model_matrix <- model.matrix(formula, data = design_df)
   XtX <- crossprod(model_matrix)
   p <- ncol(model_matrix)
-
   inv_XtX <- solve(XtX)
-  a_opt <- sum(diag(inv_XtX)) / p  # Mean of diagonal elements (average variance)
+  a_opt <- sum(diag(inv_XtX)) / p  
 
   return(as.numeric(a_opt))
 }
-
-# Compute A-optimality for the best model, cherry model, and heirloom model
-best_A_opt <- compute_a_optimality(design_df, best_formula)
-best_A_cherry <- compute_a_optimality(cherry_data, formula_cherry)
-best_A_heirloom <- compute_a_optimality(heirloom_data, formula_heirloom)
 ```
 
 ```{r}
 # Function to compute G-optimality (maximum prediction variance) for a given design and formula
 compute_g_optimality <- function(design_df, formula) {
+  design_df <- .prepare_df(design_df)
   model_matrix <- model.matrix(formula, data = design_df)
   XtX <- crossprod(model_matrix)
   inv_XtX <- solve(XtX)
 
-  pred_vars <- rowSums((model_matrix %*% inv_XtX) * model_matrix) # Prediction variances for all design points
-  g_opt <- max(pred_vars)  # Maximum prediction variance
+  pred_vars <- rowSums((model_matrix %*% inv_XtX) * model_matrix) 
+  g_opt <- max(pred_vars) 
 
   return(as.numeric(g_opt))
 }
-
-# Compute G-optimality for the best model, cherry model, and heirloom model
-best_G_opt <- compute_g_optimality(design_df, best_formula)
-best_G_cherry <- compute_g_optimality(cherry_data, formula_cherry)
-best_G_heirloom <- compute_g_optimality(heirloom_data, formula_heirloom)
 ```
+
 ```{r}
+# Define the grid size as 7 rows by 7 columns.
+rows <- 7
+cols <- 7
+
+# Assign temperature values decreasing from 28°C to 21°C, repeated across columns so each row shares the same temperature.
+temperature <- rep(seq(28, 21, length.out = rows), times = cols)
+
+# Assign light intensity values increasing from 140 to 200, repeated down rows so each column shares the same PPFD.
+PPFD <- rep(seq(140, 200, length.out = cols), each = rows)
+
+# Create a data frame of all row–column combinations to represent the experimental grid layout.
+env_data <- expand.grid(
+  row = 1:rows,
+  col = 1:cols
+)
+
+# Attach temperature and PPFD values to each grid cell in the design.
+env_data$temperature <- temperature
+env_data$PPFD <- PPFD
+
+# Define coordinates of “bad plots” (locations to be excluded due to missing conditions).
+idx <- cbind(
+  c(5, 5, 5, 4, 4, 4, 1:7), 
+  c(1:3, 5:7, rep(4,7))
+)
+# Identify the row indices in env_data corresponding to those bad plot coordinates.
+bad_rows <- apply(idx, 1, function(rc) {
+  which(env_data$row == rc[1] & env_data$col == rc[2])
+}) |> unlist()
+# Mark bad plots by setting their temperature and PPFD values to NA (missing).
+env_data$temperature[bad_rows] <- NA
+env_data$PPFD[bad_rows] <- NA
+# Label each plot with a unique name based on its row and column (e.g., "R1C1").
+env_data$plot_name <- paste0("R", env_data$row, "C", env_data$col)
+
+
+```
+
+```{r}
+# Save the full environmental grid (with bad plots marked) as an RData file for later use.
 save(
-  best_D_opt, best_D_cherry, best_D_heirloom,
-  best_A_opt, best_A_cherry, best_A_heirloom,
-  best_G_opt, best_G_cherry, best_G_heirloom,
-  formula_heirloom,formula_cherry,best_formula,
-  file = "best_optimality_values.RData"
+  env_data,
+  file = "env_data.RData"
 )
 ```
 
-
 ```{r}
-# Function to generate multiple CRD designs and compute their optimality criteria
-generate_crd_designs <- function(n_designs = 50, 
-                                 formula) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type_pool <- c("cherry", "heirloom")
-
-  designs <- vector("list", n_designs)
-  dopt <- numeric(n_designs)
-  aopt <- numeric(n_designs)
-  gopt <- numeric(n_designs)
-
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility for each design
-
-    # Randomly sample manure levels and plant types for this design
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
-    plant_types <- plant_type_pool
-
-    # Calculate the maximum number of seeds and replicates allowed
-    max_seeds <- if (length(plant_types) == 1) 30 else 18
-    n_treatments <- length(manure_levels) * length(plant_types)
-    max_n_reps <- floor((max_seeds * length(plant_types)) / n_treatments)
-    if (max_n_reps < 1) {
-      i <- i + 1
-      next
-    }
-
-    # Randomly select number of replicates and calculate total units
-    n_reps <- sample(1:max_n_reps, 1)
-    n_units <- n_treatments * n_reps
-
-    # Generate the CRD design table
-    df <- design() %>%
-      set_units(unit = paste0("U", 1:n_units)) %>%
-      set_trts(
-        percent_manure = as.character(manure_levels),
-        plant_type = as.character(plant_types)
-      ) %>%
-      allot_trts(percent_manure ~ unit) %>%
-      allot_trts(plant_type ~ unit) %>%
-      assign_trts("random") %>%
-      serve_table() %>%
-      as.data.frame()
-
-    # Set column types and randomly assign environmental conditions
-    df$percent_manure <- as.numeric(df$percent_manure)
-    df$plant_type <- factor(df$plant_type, levels = c("cherry", "heirloom"))
-    df$temperature <- runif(nrow(df), 25, 29)
-    df$light_intensity <- runif(nrow(df), 5000, 100000)
-
-    # Compute D-, A-, G-optimality for the design, handle errors gracefully
-    dopt[i] <- tryCatch(compute_d_optimality(df, formula), error = function(e) NA)
-    aopt[i] <- tryCatch(compute_a_optimality(df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(df, formula), error = function(e) NA)
+# Function to generate multiple random single-variety designs (cherry or heirloom)
+simulate_designs <- function(env_data, n_seed, plant_type_label, n_designs = 1000) {
+  # Identify all available plots with non-missing temperature and PPFD
+  available_idx <- which(!is.na(env_data$temperature) & !is.na(env_data$PPFD))
+  
+  replicate(n_designs, {
+    # Randomly select 5 manure levels, always including 0
+    manure_levels <- c(0, sort(sample(1:100, 4)))
     
-    designs[[i]] <- df
-    i <- i + 1
-  }
-
-  # Return results as a list
-  list(
-    designs = designs,
-    d_opt = dopt,
-    a_opt = aopt,
-    g_opt = gopt
-  )
+    # Randomly select n_seed available plots
+    idx <- sample(available_idx, n_seed)
+    
+    # Assign manure levels to the selected plots
+    percent_manure <- rep(NA, nrow(env_data))
+    assigned <- rep(manure_levels, length.out = n_seed)
+    percent_manure[idx] <- sample(assigned)
+    
+    # Assign plant type to the selected plots
+    plant_type <- rep(NA, nrow(env_data))
+    plant_type[idx] <- plant_type_label
+    
+    # Return the completed design as a data frame
+    df <- env_data
+    df$percent_manure <- percent_manure
+    df$plant_type <- plant_type
+    df
+  }, simplify = FALSE)
 }
 
-# Generate 50 CRD designs and compute optimality criteria
-CRD_result <- generate_crd_designs(n_designs = 50, formula = best_formula)
-
-# Find designs with valid (finite) optimality values
-valid_idx <- is.finite(CRD_result$d_opt) & is.finite(CRD_result$a_opt) & is.finite(CRD_result$g_opt)
-
-# Extract valid D-, A-, G-optimality values
-valid_dopt <- CRD_result$d_opt[valid_idx]
-valid_aopt <- CRD_result$a_opt[valid_idx]
-valid_gopt <- CRD_result$g_opt[valid_idx]
-
-# Get number of model parameters
-p <- ncol(model.matrix(best_formula, data = CRD_result$designs[[which(valid_idx)[1]]]))
-
-# Calculate relative efficiency for each optimality criterion
-d_eff <- exp((valid_dopt - best_D_opt) / p)
-a_eff <- (best_A_opt / valid_aopt)
-g_eff <- (best_G_opt / valid_gopt)
-
-# Plot boxplots for D-, A-, and G-efficiency across all valid designs
-par(mfrow = c(1, 3))
-boxplot(d_eff, main = "D-efficiency of 50 CRD Designs", ylab = "Relative Information", col = "lightblue", border = "blue")
-boxplot(a_eff, main = "A-efficiency of 50 CRD Designs", ylab = "Relative Efficiency", col = "lightgreen", border = "darkgreen")
-boxplot(g_eff, main = "G-efficiency of 50 CRD Designs", ylab = "Relative Efficiency", col = "pink", border = "red")
-par(mfrow = c(1, 1))
-```
-
-```{r}
-# Function to generate CRD designs for cherry only and compute optimality
-generate_crd_designs_cherry <- function(n_designs = 50, formula) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type_fixed <- "cherry"
-
-  designs <- vector("list", n_designs)
-  dopt <- numeric(n_designs)
-  aopt <- numeric(n_designs)
-  gopt <- numeric(n_designs)
-
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set random seed for reproducibility
-
-    # Randomly sample manure levels for this design (only cherry plant type)
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
-    plant_types <- plant_type_fixed
-
-    # Calculate max seeds and replicates allowed for cherry
-    max_seeds <- 30  
-    n_treatments <- length(manure_levels)
-    max_n_reps <- floor(max_seeds / n_treatments)
-    if (max_n_reps < 1) {
-      i <- i + 1
-      next
-    }
-
-    # Randomly select number of replicates and total units
-    n_reps <- sample(1:max_n_reps, 1)
-    n_units <- n_treatments * n_reps
-
-    # Generate CRD design table
-    df <- design() %>%
-      set_units(unit = paste0("U", 1:n_units)) %>%
-      set_trts(
-        percent_manure = as.character(manure_levels)
-      ) %>%
-      allot_trts(percent_manure ~ unit) %>%
-      assign_trts("random") %>%
-      serve_table() %>%
-      as.data.frame()
-
-    # Set column types and assign random environment variables
-    df$percent_manure <- as.numeric(df$percent_manure)
-    df$plant_type <- factor("cherry", levels = c("cherry")) 
-    df$temperature <- runif(nrow(df), 25, 29)
-    df$light_intensity <- runif(nrow(df), 5000, 100000)
-
-    # Compute D-, A-, G-optimality, handling errors gracefully
-    dopt[i] <- tryCatch(compute_d_optimality(df, formula), error = function(e) NA)
-    aopt[i] <- tryCatch(compute_a_optimality(df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(df, formula), error = function(e) NA)
-    designs[[i]] <- df
-    i <- i + 1
-  }
-  # Return results as a list
-  list(
-    designs = designs,
-    d_opt = dopt,
-    a_opt = aopt,
-    g_opt = gopt
-  )
+# Function to generate multiple random mixed-variety designs (cherry + heirloom)
+simulate_designs_mixed <- function(env_data, n_cherry = 18, n_heirloom = 18, n_designs = 1000) {
+  # Identify all available plots with non-missing temperature and PPFD
+  available_idx <- which(!is.na(env_data$temperature) & !is.na(env_data$PPFD))
+  
+  # Count total number of available plots
+  n_available <- length(available_idx)
+  
+  replicate(n_designs, {
+    # Randomly select 5 manure levels, always including 0
+    manure_levels <- c(0, sort(sample(1:100, 4)))
+    
+    # Randomly select plots for both cherry and heirloom
+    idx <- sample(available_idx, n_cherry + n_heirloom) 
+    cherry_idx <- idx[1:n_cherry]
+    heirloom_idx <- idx[(n_cherry+1):(n_cherry+n_heirloom)]
+    
+    # Initialize manure assignment and plant type
+    percent_manure <- rep(NA, nrow(env_data))
+    plant_type <- rep(NA, nrow(env_data))
+    
+    # Assign manure treatments to cherry and heirloom plots
+    percent_manure[cherry_idx]   <- rep(manure_levels, length.out = n_cherry) |> sample()
+    percent_manure[heirloom_idx] <- rep(manure_levels, length.out = n_heirloom) |> sample()
+    
+    # Assign plant type labels
+    plant_type[cherry_idx]   <- "cherry"
+    plant_type[heirloom_idx] <- "heirloom"
+    
+    # Return the completed design as a data frame
+    df <- env_data
+    df$percent_manure <- percent_manure
+    df$plant_type <- factor(plant_type, levels = c("cherry", "heirloom"))
+    df
+  }, simplify = FALSE)
 }
 
-# Generate 50 CRD designs for cherry only
-CRD_result_cherry <- generate_crd_designs_cherry(n_designs = 50, formula = formula_cherry)
+# Set a reproducible random seed for consistent results
+set.seed(123)
 
-# Identify valid designs with finite optimality values
-valid_idx_cherry <- is.finite(CRD_result_cherry$d_opt) & is.finite(CRD_result_cherry$a_opt) & is.finite(CRD_result_cherry$g_opt)
-valid_dopt_cherry <- CRD_result_cherry$d_opt[valid_idx_cherry]
-valid_aopt_cherry <- CRD_result_cherry$a_opt[valid_idx_cherry]
-valid_gopt_cherry <- CRD_result_cherry$g_opt[valid_idx_cherry]
-
-# Get number of parameters in the model matrix
-p_cherry <- ncol(model.matrix(formula_cherry, data = CRD_result_cherry$designs[[which(valid_idx_cherry)[1]]]))
-
-# Calculate D-, A-, G-efficiency for valid designs
-d_eff_cherry <- exp((valid_dopt_cherry - best_D_cherry) / p_cherry)
-a_eff_cherry <- best_A_cherry / valid_aopt_cherry
-g_eff_cherry <- best_G_cherry / valid_gopt_cherry
-
-# Plot three efficiency boxplots in one row
-par(mfrow = c(1, 3))
-boxplot(d_eff_cherry,
-        main = "D-efficiency: Cherry (CRD)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_cherry,
-        main = "A-efficiency: Cherry (CRD)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_cherry,
-        main = "G-efficiency: Cherry (CRD)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Generate 1000 random designs for cherry-only, heirloom-only, and mixed scenarios
+cherry_designs   <- simulate_designs(env_data, 30, "cherry", n_designs = 1000)
+heirloom_designs <- simulate_designs(env_data, 30, "heirloom", n_designs = 1000)
+mixed_designs    <- simulate_designs_mixed(env_data, 18, 18, n_designs = 1000)
 
 ```
 
 ```{r}
-# Function to generate CRD designs for heirloom only and compute optimality
-generate_crd_designs_heirloom <- function(n_designs = 50, formula) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type_fixed <- "heirloom"
-
-  designs <- vector("list", n_designs)
-  dopt <- numeric(n_designs)
-  aopt <- numeric(n_designs)
-  gopt <- numeric(n_designs)
-
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility
-
-    # Randomly sample manure levels for each design (only heirloom plant type)
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
-    plant_types <- plant_type_fixed
-
-    # Calculate max seeds and replicates allowed for heirloom
-    max_seeds <- 30  
-    n_treatments <- length(manure_levels)
-    max_n_reps <- floor(max_seeds / n_treatments)
-    if (max_n_reps < 1) {
-      i <- i + 1
-      next
-    }
-
-    # Randomly select number of replicates and calculate total units
-    n_reps <- sample(1:max_n_reps, 1)
-    n_units <- n_treatments * n_reps
-
-    # Generate the CRD design table
-    df <- design() %>%
-      set_units(unit = paste0("U", 1:n_units)) %>%
-      set_trts(
-        percent_manure = as.character(manure_levels)
-      ) %>%
-      allot_trts(percent_manure ~ unit) %>%
-      assign_trts("random") %>%
-      serve_table() %>%
-      as.data.frame()
-
-    # Set column types and assign random environment variables
-    df$percent_manure <- as.numeric(df$percent_manure)
-    df$plant_type <- factor("heirloom", levels = c("heirloom")) 
-    df$temperature <- runif(nrow(df), 25, 29)
-    df$light_intensity <- runif(nrow(df), 5000, 100000)
-
-    # Compute D-, A-, G-optimality, handling errors gracefully
-    dopt[i] <- tryCatch(compute_d_optimality(df, formula), error = function(e) NA)
-    aopt[i] <- tryCatch(compute_a_optimality(df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(df, formula), error = function(e) NA)
-    designs[[i]] <- df
-    i <- i + 1
-  }
-
-  # Return results as a list
-  list(
-    designs = designs,
-    d_opt = dopt,
-    a_opt = aopt,
-    g_opt = gopt
-  )
-}
-
-# Generate 50 CRD designs for heirloom only
-CRD_result_heirloom <- generate_crd_designs_heirloom(n_designs = 50, formula = formula_heirloom)
-
-# Identify valid designs with finite optimality values
-valid_idx_heirloom <- is.finite(CRD_result_heirloom$d_opt) &
-                      is.finite(CRD_result_heirloom$a_opt) &
-                      is.finite(CRD_result_heirloom$g_opt)
-
-valid_dopt_heirloom <- CRD_result_heirloom$d_opt[valid_idx_heirloom]
-valid_aopt_heirloom <- CRD_result_heirloom$a_opt[valid_idx_heirloom]
-valid_gopt_heirloom <- CRD_result_heirloom$g_opt[valid_idx_heirloom]
-
-# Get number of parameters in the model matrix
-p_heirloom <- ncol(model.matrix(formula_heirloom, data = CRD_result_heirloom$designs[[which(valid_idx_heirloom)[1]]]))
-
-# Calculate D-, A-, and G-efficiency for valid designs
-d_eff_heirloom <- exp((valid_dopt_heirloom - best_D_heirloom) / p_heirloom)
-a_eff_heirloom <- best_A_heirloom / valid_aopt_heirloom
-g_eff_heirloom <- best_G_heirloom / valid_gopt_heirloom
-
-# Plot three efficiency boxplots in one row
-par(mfrow = c(1, 3))
-boxplot(d_eff_heirloom,
-        main = "D-efficiency: Heirloom (CRD)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_heirloom,
-        main = "A-efficiency: Heirloom (CRD)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_heirloom,
-        main = "G-efficiency: Heirloom (CRD)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Save the simulated designs (cherry, heirloom, mixed) for later use
+save(
+  cherry_designs, heirloom_designs, mixed_designs,
+  file = "simulation_design.RData"
+)
 
 ```
 
-
 ```{r}
-# Function to generate multiple RCBD designs and compute their optimality criteria
-generate_rcbd_designs <- function(n_designs = 50, formula, temperature_blocks = c(25, 26, 27, 28)) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type_fixed <- c("cherry", "heirloom")  # Use both types
-  n_blocks <- length(temperature_blocks)
+# Wrapper function to safely run a computation and return NA if it fails
+safe_compute <- function(f, ...) {
+  tryCatch(f(...), error = function(e) NA)
+}
 
-  designs <- vector("list", n_designs)
-  dopt <- numeric(n_designs)
-  aopt <- numeric(n_designs)
-  gopt <- numeric(n_designs)
+# Function to identify the golden standard (best) design from a list
+get_golden_standard <- function(design_list, formula) {
+  # Compute D-optimality scores for all designs
+  D_scores <- sapply(design_list, function(d) safe_compute(compute_d_optimality, d, formula))
+  # Compute A-optimality scores for all designs
+  A_scores <- sapply(design_list, function(d) safe_compute(compute_a_optimality, d, formula))
+  # Compute G-optimality scores for all designs
+  G_scores <- sapply(design_list, function(d) safe_compute(compute_g_optimality, d, formula))
 
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility
+  # Identify designs with valid scores
+  valid <- is.finite(D_scores) & is.finite(A_scores) & is.finite(G_scores)
+  if (sum(valid) == 0) stop("No valid designs for this scenario and formula!")
 
-    # Randomly select 1-5 manure levels
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
+  # Extract valid scores and designs
+  Dv <- D_scores[valid]; Av <- A_scores[valid]; Gv <- G_scores[valid]
+  designs_valid <- design_list[valid]
 
-    # Build all combinations of manure and plant type
-    trt_combos <- expand.grid(
-      percent_manure = manure_levels,
-      plant_type = plant_type_fixed,
-      stringsAsFactors = FALSE
+  # Convert raw scores into efficiency measures (scaled between 0 and 1)
+  D_eff <- exp(Dv) / max(exp(Dv), na.rm = TRUE)   # Convert log(D) back to D
+  A_eff <- min(Av, na.rm = TRUE) / Av
+  G_eff <- min(Gv, na.rm = TRUE) / Gv
+
+  # Compute overall efficiency by summing D-, A-, and G-efficiency
+  overall <- D_eff + A_eff + G_eff
+  best_idx <- which.max(overall)
+
+  # Return the best design and its associated scores
+  list(
+    design = designs_valid[[best_idx]],
+    scores = data.frame(
+      D_log = Dv[best_idx],
+      D = exp(Dv[best_idx]), 
+      A = Av[best_idx],
+      G = Gv[best_idx],
+      D_eff = D_eff[best_idx]*100,
+      A_eff = A_eff[best_idx]*100,
+      G_eff = G_eff[best_idx]*100,
+      overall = overall[best_idx]
     )
-
-    n_treatments <- nrow(trt_combos)
-    n_units <- n_blocks * n_treatments
-    max_seeds <- 36
-
-    # Skip if design exceeds max units
-    if (n_units > max_seeds) {
-      i <- i + 1
-      next
-    }
-
-    # Construct block × treatment design
-    design_df <- do.call(rbind, replicate(n_blocks, trt_combos, simplify = FALSE))
-    design_df$block <- rep(paste0("B", 1:n_blocks), each = n_treatments)
-    design_df$temperature <- rep(temperature_blocks, each = n_treatments)
-    design_df$unit <- paste0("U", seq_len(nrow(design_df)))
-
-    # Randomize within blocks
-    design_df <- design_df %>%
-      dplyr::group_by(block) %>%
-      dplyr::mutate(row = dplyr::row_number()) %>%
-      dplyr::ungroup() %>%
-      dplyr::arrange(sample(n()))
-
-    # Convert data types and add random light intensity
-    design_df$percent_manure <- as.numeric(design_df$percent_manure)
-    design_df$plant_type <- factor(design_df$plant_type, levels = c("cherry", "heirloom"))
-    design_df$block <- factor(design_df$block)
-    design_df$light_intensity <- runif(nrow(design_df), 5000, 100000)
-
-    # Compute D-, A-, and G-optimality, handling errors gracefully
-    dopt[i] <- tryCatch({
-      compute_d_optimality(design_df, formula)
-    }, error = function(e) {
-      message("Design ", i, " failed: ", e$message)
-      return(NA_real_)
-    })
-    aopt[i] <- tryCatch(compute_a_optimality(design_df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(design_df, formula), error = function(e) NA)
-
-    designs[[i]] <- if (!is.null(design_df) && ncol(design_df) > 0) design_df else NULL
-    i <- i + 1
-  }
-
-  # Return results as a list
-  list(
-    designs = designs,
-    d_opt = dopt,
-    a_opt = aopt,
-    g_opt = gopt
   )
 }
 
-# Generate 50 RCBD designs and calculate optimality criteria
-rcbd_result <- generate_rcbd_designs(n_designs = 50, formula = best_formula)
+# Select the golden standard design for each scenario with its corresponding formula
+golden_cherry_df   <- get_golden_standard(cherry_designs,   formula_cherry)
+golden_heirloom_df <- get_golden_standard(heirloom_designs, formula_heirloom)
+golden_mixed_df    <- get_golden_standard(mixed_designs,    best_formula)
 
-# Find valid designs (D/A/G all finite and positive for A and G)
-valid_idx_RCBD <- is.finite(rcbd_result$d_opt) &
-                  is.finite(rcbd_result$a_opt) & rcbd_result$a_opt > 0 &
-                  is.finite(rcbd_result$g_opt) & rcbd_result$g_opt > 0
+# Extract D-optimality values (log scale) for each golden design
+golden_cherry_D <- golden_cherry_df$scores$D_log
+golden_heirloom_D <- golden_heirloom_df$scores$D_log
+golden_mixed_D <- golden_mixed_df$scores$D_log
 
-valid_dopt_RCBD <- rcbd_result$d_opt[valid_idx_RCBD]
-valid_aopt_RCBD <- rcbd_result$a_opt[valid_idx_RCBD]
-valid_gopt_RCBD <- rcbd_result$g_opt[valid_idx_RCBD]
+# Extract A-optimality values for each golden design
+golden_cherry_A <- golden_cherry_df$scores$A
+golden_heirloom_A <- golden_heirloom_df$scores$A
+golden_mixed_A <- golden_mixed_df$scores$A
 
-# Get a valid design for parameter count calculation
-first_valid <- which(valid_idx_RCBD & !sapply(rcbd_result$designs, is.null))[1]
-df_valid <- rcbd_result$designs[[first_valid]]
-p_RCBD <- ncol(model.matrix(best_formula, data = df_valid))
+# Extract G-optimality values for each golden design
+golden_cherry_G <- golden_cherry_df$scores$G
+golden_heirloom_G <- golden_heirloom_df$scores$G
+golden_mixed_G <- golden_mixed_df$scores$G
 
-# Calculate D-, A-, G-efficiency for valid designs
-d_eff_rcbd <- exp((valid_dopt_RCBD - best_D_opt) / p_RCBD)
-a_eff_rcbd <- best_A_opt / valid_aopt_RCBD
-g_eff_rcbd <- best_G_opt / valid_gopt_RCBD
+# Combine the golden design scores into a summary table across scenarios
+Golden_opt_summary <- rbind(
+  cbind(Scenario = "Cherry",   golden_cherry_df$scores),
+  cbind(Scenario = "Heirloom", golden_heirloom_df$scores),
+  cbind(Scenario = "Mixed",    golden_mixed_df$scores)
+)
 
-# Visualize the efficiencies using three boxplots in one row
-par(mfrow = c(1, 3))
-boxplot(d_eff_rcbd,
-        main = "D-efficiency:RCBD-Temp Designs",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_rcbd,
-        main = "A-efficiency: RCBD-Temp Designs",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_rcbd,
-        main = "G-efficiency: RCBD-Temp Designs",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Display the summary of golden standard optimality values
+Golden_opt_summary
 
 ```
 
 ```{r}
-# Function to generate RCBD designs for a single plant type and compute optimality criteria
-generate_rcbd_designs <- function(n_designs = 50,
-                                  formula,
-                                  temperature_blocks = c(25, 26, 27, 28),
-                                  plant_type = c("cherry", "heirloom")) {
-
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type <- match.arg(plant_type)  # Only allow one plant type
-  n_blocks <- length(temperature_blocks)
-
-  designs <- vector("list", n_designs)
-  dopt <- numeric(n_designs)
-  aopt <- numeric(n_designs)
-  gopt <- numeric(n_designs)
-
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility
-
-    # Randomly select 1–5 manure levels
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
-
-    # Build treatment combinations for this plant type
-    trt_combos <- expand.grid(
-      percent_manure = manure_levels,
-      stringsAsFactors = FALSE
-    )
-    trt_combos$plant_type <- plant_type
-
-    n_treatments <- nrow(trt_combos)
-    n_units <- n_blocks * n_treatments
-    max_seeds <- 30  # Max 30 seeds for a single plant type
-
-    # Skip design if it exceeds maximum allowed units
-    if (n_units > max_seeds) {
-      i <- i + 1
-      next
-    }
-
-    # Create full design table (block × treatment)
-    design_df <- do.call(rbind, replicate(n_blocks, trt_combos, simplify = FALSE))
-    design_df$block <- rep(paste0("B", 1:n_blocks), each = n_treatments)
-    design_df$temperature <- rep(temperature_blocks, each = n_treatments)
-    design_df$unit <- paste0("U", seq_len(nrow(design_df)))
-
-    # Randomize within blocks
-    design_df <- design_df %>%
-      dplyr::group_by(block) %>%
-      dplyr::mutate(row = dplyr::row_number()) %>%
-      dplyr::ungroup() %>%
-      dplyr::arrange(sample(n()))
-
-    # Convert columns and add random light intensity
-    design_df$percent_manure <- as.numeric(design_df$percent_manure)
-    design_df$plant_type <- factor(design_df$plant_type, levels = c("cherry", "heirloom"))
-    design_df$block <- factor(design_df$block)
-    design_df$light_intensity <- runif(nrow(design_df), 5000, 100000)
-
-    # Compute D-, A-, and G-optimality with error handling
-    dopt[i] <- tryCatch({
-      compute_d_optimality(design_df, formula)
-    }, error = function(e) {
-      message("Design ", i, " failed: ", e$message)
-      return(NA_real_)
-    })
-    aopt[i] <- tryCatch(compute_a_optimality(design_df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(design_df, formula), error = function(e) NA)
-
-    designs[[i]] <- if (!is.null(design_df) && ncol(design_df) > 0) design_df else NULL
-    i <- i + 1
-  }
-  # Return results as a list
-  list(
-    designs = designs,
-    d_opt = dopt,
-    a_opt = aopt,
-    g_opt = gopt
-  )
-}
-
-# Generate 500 RCBD designs for cherry only
-rcbd_cherry <- generate_rcbd_designs(n_designs = 500,
-                                     formula = formula_cherry,
-                                     plant_type = "cherry")
-
-# Find valid designs (all criteria finite)
-valid_idx_cherry <- is.finite(rcbd_cherry$d_opt) &
-                    is.finite(rcbd_cherry$a_opt) & 
-                    is.finite(rcbd_cherry$g_opt) 
-
-# Extract optimality values for valid designs
-valid_dopt_cherry <- rcbd_cherry$d_opt[valid_idx_cherry]
-valid_aopt_cherry <- rcbd_cherry$a_opt[valid_idx_cherry]
-valid_gopt_cherry <- rcbd_cherry$g_opt[valid_idx_cherry]
-
-# Use first valid design to get parameter count
-df_cherry <- rcbd_cherry$designs[[which(valid_idx_cherry)[1]]]
-p_cherry <- ncol(model.matrix(formula_cherry, data = df_cherry))
-
-# Calculate D-, A-, G-efficiency for valid designs
-d_eff_cherry <- exp((valid_dopt_cherry - best_D_cherry) / p_cherry)
-a_eff_cherry <- best_A_cherry / valid_aopt_cherry
-g_eff_cherry <- best_G_cherry / valid_gopt_cherry
-
-# Visualize the three efficiencies in one row of boxplots
-par(mfrow = c(1, 3))
-boxplot(d_eff_cherry,
-        main = "D-efficiency:Cherry (RCBD-Temp)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_cherry,
-        main = "A-efficiency:Cherry (RCBD-Temp)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_cherry,
-        main = "G-efficiency:Cherry (RCBD-Temp)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Save the full golden standard design objects (data and scores) for all scenarios
+save(
+  golden_cherry_df, golden_heirloom_df, golden_mixed_df,
+  file = "golden_df.RData"
+)
 
 ```
 
 ```{r}
-# Generate 500 RCBD designs for heirloom only
-rcbd_heirloom <- generate_rcbd_designs(n_designs = 500,
-                                       formula = formula_heirloom,
-                                       plant_type = "heirloom")
-
-# Find valid designs (all criteria finite)
-valid_idx_heirloom <- is.finite(rcbd_heirloom$d_opt) &
-                      is.finite(rcbd_heirloom$a_opt) & 
-                      is.finite(rcbd_heirloom$g_opt) 
-
-# Extract optimality values for valid designs
-valid_dopt_heirloom <- rcbd_heirloom$d_opt[valid_idx_heirloom]
-valid_aopt_heirloom <- rcbd_heirloom$a_opt[valid_idx_heirloom]
-valid_gopt_heirloom <- rcbd_heirloom$g_opt[valid_idx_heirloom]
-
-# Use first valid design to get parameter count
-df_heirloom <- rcbd_heirloom$designs[[which(valid_idx_heirloom)[1]]]
-p_heirloom <- ncol(model.matrix(formula_heirloom, data = df_heirloom))
-
-# Calculate D-, A-, and G-efficiency for valid designs
-d_eff_heirloom <- exp((valid_dopt_heirloom - best_D_heirloom) / p_heirloom)
-a_eff_heirloom <- best_A_heirloom / valid_aopt_heirloom
-g_eff_heirloom <- best_G_heirloom / valid_gopt_heirloom
-
-# Visualize the three efficiencies in one row of boxplots
-par(mfrow = c(1, 3))
-boxplot(d_eff_heirloom,
-        main = "D-efficiency:Heirloom(RCBD-Temp)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_heirloom,
-        main = "A-efficiency:Heirloom(RCBD-Temp)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_heirloom,
-        main = "G-efficiency:Heirloom(RCBD-Temp)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Save the extracted D-, A-, and G-optimality values for each golden standard design
+save(
+  golden_cherry_D, golden_cherry_A, golden_cherry_G,
+  golden_heirloom_D, golden_heirloom_A, golden_heirloom_G,
+  golden_mixed_D, golden_mixed_A, golden_mixed_G,
+  file = "golden_optimality.RData"
+)
 
 ```
 
-
 ```{r}
-# Function to generate RCBD designs using light intensity as blocks and compute optimality criteria
-generate_rcbd_lightblock <- function(n_designs = 50,
-                                     formula,
-                                     light_blocks = c(5000, 12000, 18000, 60000, 80000, 100000)) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type_fixed <- c("cherry", "heirloom")
-  n_blocks <- length(light_blocks)
-
+# Function to generate multiple Completely Randomized Designs (CRDs)
+generate_crd_designs <- function(env_data, 
+                                 n_designs = 50, 
+                                 formula, 
+                                 plant_type_label = c("cherry", "heirloom")) {
+  
+  # Initialize lists to store designs and their optimality scores
   designs <- vector("list", n_designs)
   dopt <- numeric(n_designs)
   aopt <- numeric(n_designs)
   gopt <- numeric(n_designs)
   
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility
-
-    # Randomly select manure levels for this design
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
-
-    # Build all treatment combinations (manure × plant type)
+  # Identify available plots with valid temperature and PPFD
+  available_idx <- which(!is.na(env_data$temperature) & !is.na(env_data$PPFD))
+  
+  for (i in seq_len(n_designs)) {
+    # Fix random seed for reproducibility of each design
+    set.seed(i)
+    
+    # Randomly choose 5 manure levels including 0
+    manure_levels <- c(0, sample(1:100, 4, replace = FALSE))
+    
+    # Create all treatment combinations of manure and plant type
     trt_combos <- expand.grid(
       percent_manure = manure_levels,
-      plant_type = plant_type_fixed,
+      plant_type = plant_type_label,
       stringsAsFactors = FALSE
     )
-
-    n_treatments <- nrow(trt_combos)
-    n_units <- n_blocks * n_treatments
-    max_seeds <- 36
-
-    # Skip if units exceed the allowed maximum
-    if (n_units > max_seeds) {
-      i <- i + 1
-      next
+    
+    # Define maximum number of seeds depending on single vs. mixed variety
+    if (length(plant_type_label) == 1) {
+      max_seeds <- 30  
+    } else {
+      max_seeds <- 36  
     }
-
-    # Construct full design (block × treatments)
-    design_df <- do.call(rbind, replicate(n_blocks, trt_combos, simplify = FALSE))
-    design_df$block <- rep(paste0("B", 1:n_blocks), each = n_treatments)
-    design_df$light_intensity <- rep(light_blocks, each = n_treatments)
-    design_df$unit <- paste0("U", seq_len(nrow(design_df)))
-
-    # Randomize within blocks
-    design_df <- design_df %>%
-      dplyr::group_by(block) %>%
-      dplyr::mutate(row = dplyr::row_number()) %>%
-      dplyr::ungroup() %>%
-      dplyr::arrange(sample(n()))
-
-    # Convert columns and add random temperature
-    design_df$percent_manure <- as.numeric(design_df$percent_manure)
-    design_df$plant_type <- factor(design_df$plant_type, levels = c("cherry", "heirloom"))
-    design_df$block <- factor(design_df$block)
-    design_df$temperature <- runif(nrow(design_df), 25, 29)
-
-    # Compute D-, A-, and G-optimality, handling errors gracefully
-    dopt[i] <- tryCatch({
-      compute_d_optimality(design_df, formula)
-    }, error = function(e) {
-      message("Design ", i, " failed: ", e$message)
-      return(NA_real_)
-    })
-    aopt[i] <- tryCatch(compute_a_optimality(design_df, formula), error = function(e) NA)
-    gopt[i] <- tryCatch(compute_g_optimality(design_df, formula), error = function(e) NA)
-
-    designs[[i]] <- if (!is.null(design_df) && ncol(design_df) > 0) design_df else NULL
-    i <- i + 1
+    
+    # Determine the maximum number of replicates per treatment
+    n_treatments <- length(manure_levels) * length(plant_type_label)
+    max_n_reps <- floor(max_seeds / n_treatments)
+    if (max_n_reps < 1) next
+    
+    # Randomly choose the number of replicates and calculate required units
+    n_reps <- sample(1:max_n_reps, 1)
+    n_units <- n_treatments * n_reps
+    
+    # Randomly assign plots from the available grid
+    chosen_idx <- sample(available_idx, n_units)
+    df <- env_data[chosen_idx, ]
+    
+    # Assign randomized treatment combinations to chosen plots
+    trt_df <- trt_combos[rep(1:n_treatments, each = n_reps), ]
+    trt_df <- trt_df[sample(nrow(trt_df)), ]
+    df$percent_manure <- trt_df$percent_manure
+    df$plant_type <- factor(trt_df$plant_type, levels = c("cherry", "heirloom"))
+    
+    # Compute D-, A-, and G-optimality scores
+    dopt[i] <- tryCatch(compute_d_optimality(df, formula), error = function(e) NA)
+    aopt[i] <- tryCatch(compute_a_optimality(df, formula), error = function(e) NA)
+    gopt[i] <- tryCatch(compute_g_optimality(df, formula), error = function(e) NA)
+    
+    # Store design and its scores
+    designs[[i]] <- df
   }
-
-  # Return results as a list
+  
+  # Return all generated designs and their scores
   list(
     designs = designs,
     d_opt = dopt,
@@ -931,115 +533,208 @@ generate_rcbd_lightblock <- function(n_designs = 50,
   )
 }
 
-# Generate RCBD designs with light intensity as blocks
-rcbd_light <- generate_rcbd_lightblock(n_designs = 100, formula = best_formula)
-
-# Strictly filter to keep only valid designs (D, A, G are finite and A/G > 0)
-valid_idx_light <- is.finite(rcbd_light$d_opt) &
-                   is.finite(rcbd_light$a_opt) & rcbd_light$a_opt > 0 &
-                   is.finite(rcbd_light$g_opt) & rcbd_light$g_opt > 0
-
-valid_dopt_light <- rcbd_light$d_opt[valid_idx_light]
-valid_aopt_light <- rcbd_light$a_opt[valid_idx_light]
-valid_gopt_light <- rcbd_light$g_opt[valid_idx_light]
-
-# Get first valid design for parameter count
-first_valid <- which(valid_idx_light & !sapply(rcbd_light$designs, is.null))[1]
-df_valid <- rcbd_light$designs[[first_valid]]
-p_light <- ncol(model.matrix(best_formula, data = df_valid))
-
-# Calculate D-, A-, G-efficiency
-d_eff_light <- exp((valid_dopt_light - best_D_opt) / p_light)
-a_eff_light <- best_A_opt / valid_aopt_light
-g_eff_light <- best_G_opt / valid_gopt_light
-
-# Visualize all three efficiencies as boxplots in one row
-par(mfrow = c(1, 3))
-boxplot(d_eff_light,
-        main = "D-efficiency: RCBD-Light Designs",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_light,
-        main = "A-efficiency: RCBD-Light Designs",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_light,
-        main = "G-efficiency: RCBD-Light Designs",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
 
 ```
 
 ```{r}
-# Function to generate RCBD designs using light intensity as blocks and compute optimality
-generate_rcbd_lightblock <- function(n_designs = 50,
-                                     formula,
-                                     plant_type = c("cherry", "heirloom"),
-                                     light_blocks = c(5000, 12000, 18000, 60000, 80000, 100000)) {
-  manure_pool <- c(0, 25, 50, 75, 100)
-  plant_type <- match.arg(plant_type, several.ok = TRUE)
-  n_blocks <- length(light_blocks)
+# Generate 50 CRD designs for cherry-only scenario
+CRD_cherry <- generate_crd_designs(env_data, n_designs = 100, 
+                                   formula = formula_cherry, 
+                                   plant_type_label = "cherry")
 
+# Identify valid designs with finite optimality scores
+valid_idx_cherry <- is.finite(CRD_cherry$d_opt) & 
+                    is.finite(CRD_cherry$a_opt) & 
+                    is.finite(CRD_cherry$g_opt)
+
+# Extract valid D-, A-, and G-optimality scores
+valid_dopt_cherry <- CRD_cherry$d_opt[valid_idx_cherry]
+valid_aopt_cherry <- CRD_cherry$a_opt[valid_idx_cherry]
+valid_gopt_cherry <- CRD_cherry$g_opt[valid_idx_cherry]
+
+# Calculate D-efficiency relative to golden standard (log scale)
+d_eff_cherry <- exp(valid_dopt_cherry - golden_cherry_D) * 100
+
+# Calculate A- and G-efficiency relative to golden standard
+a_eff_cherry <- golden_cherry_A / valid_aopt_cherry * 100
+g_eff_cherry <- golden_cherry_G / valid_gopt_cherry * 100
+
+# Summarize average efficiency values for cherry-only CRDs
+mean_table_cherry <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_cherry, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_cherry, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_cherry, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_cherry, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_cherry, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_cherry, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_cherry, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_cherry, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_cherry, na.rm = TRUE),
+  
+  row.names = "Cherry"
+)
+
+
+
+```
+
+```{r}
+# Generate 50 CRD designs for heirloom-only scenario
+CRD_heirloom <- generate_crd_designs(env_data, n_designs = 100, 
+                                     formula = formula_heirloom, 
+                                     plant_type_label = "heirloom")
+
+# Identify valid designs with finite optimality scores
+valid_idx_heirloom <- is.finite(CRD_heirloom$d_opt) & 
+                      is.finite(CRD_heirloom$a_opt) & 
+                      is.finite(CRD_heirloom$g_opt)
+
+# Extract valid D-, A-, and G-optimality scores
+valid_dopt_heirloom <- CRD_heirloom$d_opt[valid_idx_heirloom]
+valid_aopt_heirloom <- CRD_heirloom$a_opt[valid_idx_heirloom]
+valid_gopt_heirloom <- CRD_heirloom$g_opt[valid_idx_heirloom]
+
+# Calculate efficiency values relative to golden standard
+d_eff_heirloom <- exp(valid_dopt_heirloom - golden_heirloom_D) *100
+a_eff_heirloom <- golden_heirloom_A / valid_aopt_heirloom *100
+g_eff_heirloom <- golden_heirloom_G / valid_gopt_heirloom *100
+
+# Summarize average efficiency values for heirloom-only CRDs
+mean_table_heirloom <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_heirloom, na.rm = TRUE),
+  "D-efficiency (min)" = min(d_eff_heirloom, na.rm = TRUE),
+  "D-efficiency (max)" = max(d_eff_heirloom, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_heirloom, na.rm = TRUE),
+  "A-efficiency (min)" = min(a_eff_heirloom, na.rm = TRUE),
+  "A-efficiency (max)" = max(a_eff_heirloom, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_heirloom, na.rm = TRUE),
+  "G-efficiency (min)" = min(g_eff_heirloom, na.rm = TRUE),
+  "G-efficiency (max)" = max(g_eff_heirloom, na.rm = TRUE),
+  row.names = "Heirloom"
+)
+
+```
+
+```{r}
+# Generate 50 CRD designs for mixed cherry + heirloom scenario
+CRD_mixed <- generate_crd_designs(env_data, n_designs = 100, 
+                                  formula = best_formula, 
+                                  plant_type_label = c("cherry","heirloom"))
+
+# Identify valid designs with finite optimality scores
+valid_idx_mixed <- is.finite(CRD_mixed$d_opt) & 
+                   is.finite(CRD_mixed$a_opt) & 
+                   is.finite(CRD_mixed$g_opt)
+
+# Extract valid D-, A-, and G-optimality scores
+valid_dopt_mixed <- CRD_mixed$d_opt[valid_idx_mixed]
+valid_aopt_mixed <- CRD_mixed$a_opt[valid_idx_mixed]
+valid_gopt_mixed <- CRD_mixed$g_opt[valid_idx_mixed]
+
+# Calculate efficiency values relative to golden standard
+d_eff_mixed <- exp(valid_dopt_mixed - golden_mixed_D)*100
+a_eff_mixed <- golden_mixed_A / valid_aopt_mixed*100
+g_eff_mixed <- golden_mixed_G / valid_gopt_mixed*100
+
+# Summarize average efficiency values for mixed-variety CRDs
+mean_table_mixed <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_mixed, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_mixed, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_mixed, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_mixed, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_mixed, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_mixed, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_mixed, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_mixed, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_mixed, na.rm = TRUE),
+  
+  row.names = "Mixed"
+)
+
+```
+
+```{r}
+# Combine the mean efficiency tables from cherry, heirloom, and mixed CRDs
+# into a single summary data frame for easier comparison
+CRD_mean_summary <- rbind(mean_table_cherry, mean_table_heirloom, mean_table_mixed)
+
+# Display the summarized efficiency values for all scenarios
+CRD_mean_summary
+
+```
+
+
+```{r}
+# Function to generate multiple Randomized Complete Block Designs (RCBDs)
+generate_rcbd_designs <- function(env_data, n_designs = 100, formula,
+                                  plant_type_fixed = c("cherry", "heirloom"),
+                                  n_blocks = NULL) {
+  
+  # Initialize storage for designs and optimality scores
   designs <- vector("list", n_designs)
   dopt <- numeric(n_designs)
   aopt <- numeric(n_designs)
   gopt <- numeric(n_designs)
 
-  i <- 1
-  while (i <= n_designs) {
-    set.seed(i)  # Set seed for reproducibility
+  # Identify available plots with valid temperature and PPFD
+  available_idx <- which(!is.na(env_data$temperature) & !is.na(env_data$PPFD))
 
-    # Randomly select manure levels for this design
-    manure_levels <- sample(manure_pool, size = sample(1:5, 1))
+  # Define blocks by splitting temperature into n_blocks
+  block_map <- data.frame(
+    idx = available_idx,
+    temperature = env_data$temperature[available_idx],
+    block = cut(env_data$temperature[available_idx], breaks = n_blocks, labels = FALSE)
+  )
 
-    # Build all treatment combinations (manure × plant type)
+  # Extract unique block identifiers
+  unique_blocks <- unique(block_map$block)
+
+  set.seed(123)
+  for (i in seq_len(n_designs)) {
+    # Randomly select 5 manure levels including 0
+    manure_levels <- c(0, sample(1:100, 4, replace = FALSE))
+
+    # Create all treatment combinations of manure × plant type
     trt_combos <- expand.grid(
       percent_manure = manure_levels,
-      plant_type = plant_type,
+      plant_type = plant_type_fixed,
       stringsAsFactors = FALSE
     )
-
     n_treatments <- nrow(trt_combos)
-    n_units <- n_blocks * n_treatments
-    max_seeds <- if (length(plant_type) == 1) 30 else 36
 
-    # Skip if units exceed the allowed maximum
-    if (n_units > max_seeds) {
-      i <- i + 1
-      next
+    # Initialize design data frame
+    design_df <- data.frame()
+    
+    # Assign treatments within each block
+    for (b in unique_blocks) {
+      block_units <- block_map$idx[block_map$block == b]
+      chosen_idx <- sample(block_units, n_treatments)
+      df_block <- env_data[chosen_idx, ]
+      df_block$percent_manure <- trt_combos$percent_manure[sample(n_treatments)]
+      df_block$plant_type <- factor(trt_combos$plant_type[sample(n_treatments)],
+                                    levels = c("cherry", "heirloom"))
+      df_block$block <- factor(b)
+      design_df <- rbind(design_df, df_block)
     }
 
-    # Construct full design (block × treatments)
-    design_df <- do.call(rbind, replicate(n_blocks, trt_combos, simplify = FALSE))
-    design_df$block <- rep(paste0("B", 1:n_blocks), each = n_treatments)
-    design_df$light_intensity <- rep(light_blocks, each = n_treatments)
-    design_df$unit <- paste0("U", seq_len(nrow(design_df)))
-    design_df$temperature <- runif(nrow(design_df), 25, 29)
+    if (nrow(design_df) == 0) next
 
-    # Convert columns to correct types
-    design_df$percent_manure <- as.numeric(design_df$percent_manure)
-    design_df$plant_type <- factor(design_df$plant_type, levels = c("cherry", "heirloom"))
-    design_df$block <- factor(design_df$block)
-
-    # Compute D-, A-, and G-optimality, handling errors gracefully
-    dopt[i] <- tryCatch({
-      compute_d_optimality(design_df, formula)
-    }, error = function(e) {
-      message("Design ", i, " failed: ", e$message)
-      return(NA_real_)
-    })
+    # Compute optimality scores
+    dopt[i] <- tryCatch(compute_d_optimality(design_df, formula), error = function(e) NA)
     aopt[i] <- tryCatch(compute_a_optimality(design_df, formula), error = function(e) NA)
     gopt[i] <- tryCatch(compute_g_optimality(design_df, formula), error = function(e) NA)
 
-    designs[[i]] <- if (!is.null(design_df) && ncol(design_df) > 0) design_df else NULL
-    i <- i + 1
+    # Store the generated design
+    designs[[i]] <- design_df
   }
 
-  # Return results as a list
+  # Return all designs and their associated scores
   list(
     designs = designs,
     d_opt = dopt,
@@ -1048,90 +743,545 @@ generate_rcbd_lightblock <- function(n_designs = 50,
   )
 }
 
-# Generate 50 RCBD designs with light block for cherry only
-rcbd_light_cherry <- generate_rcbd_lightblock(n_designs = 50, formula = formula_cherry, plant_type = "cherry")
+```
 
-# Keep only designs with valid D/A/G optimality values, and A/G > 0
-valid_idx_cherry <- is.finite(rcbd_light_cherry$d_opt) &
-                    is.finite(rcbd_light_cherry$a_opt) & rcbd_light_cherry$a_opt > 0 &
-                    is.finite(rcbd_light_cherry$g_opt) & rcbd_light_cherry$g_opt > 0
+```{r}
+# Generate 50 mixed-variety RCBD designs with 2 blocks
+rcbd_result <- generate_rcbd_designs(env_data, n_designs = 100, formula = best_formula, n_blocks = 2)
 
-# Extract valid optimality values
-valid_dopt_cherry <- rcbd_light_cherry$d_opt[valid_idx_cherry]
-valid_aopt_cherry <- rcbd_light_cherry$a_opt[valid_idx_cherry]
-valid_gopt_cherry <- rcbd_light_cherry$g_opt[valid_idx_cherry]
+# Identify valid designs with finite and positive scores
+valid_idx_RCBD <- is.finite(rcbd_result$d_opt) &
+                  is.finite(rcbd_result$a_opt) & rcbd_result$a_opt > 0 &
+                  is.finite(rcbd_result$g_opt) & rcbd_result$g_opt > 0
 
-# Use the first valid design for model matrix dimension
-df_cherry <- rcbd_light_cherry$designs[[which(valid_idx_cherry)[1]]]
-df_cherry$percent_manure <- as.numeric(as.character(df_cherry$percent_manure))
-p_cherry <- ncol(model.matrix(formula_cherry, data = df_cherry))
+# Extract valid optimality scores
+valid_dopt_RCBD <- rcbd_result$d_opt[valid_idx_RCBD]
+valid_aopt_RCBD <- rcbd_result$a_opt[valid_idx_RCBD]
+valid_gopt_RCBD <- rcbd_result$g_opt[valid_idx_RCBD]
 
-# Calculate D-, A-, G-efficiency for valid designs
-d_eff_cherry <- exp((valid_dopt_cherry - best_D_cherry) / p_cherry)
-a_eff_cherry <- best_A_cherry / valid_aopt_cherry
-g_eff_cherry <- best_G_cherry / valid_gopt_cherry
+# Compute efficiencies relative to golden mixed design
+d_eff_rcbd <- exp(valid_dopt_RCBD - golden_mixed_D)*100
+a_eff_rcbd <- golden_mixed_A / valid_aopt_RCBD*100
+g_eff_rcbd <- golden_mixed_G / valid_gopt_RCBD*100
 
-# Plot D-, A-, and G-efficiency as boxplots in one row
-par(mfrow = c(1, 3))
-boxplot(d_eff_cherry,
-        main = "D-efficiency:Cherry(RCBD-Light)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_cherry,
-        main = "A-efficiency:Cherry(RCBD-Light)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_cherry,
-        main = "G-efficiency:Cherry(RCBD-Light)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
+# Summarize average efficiencies for mixed RCBD
+mean_table_rcbd <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_rcbd, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_rcbd, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_rcbd, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_rcbd, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_rcbd, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_rcbd, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_rcbd, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_rcbd, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_rcbd, na.rm = TRUE),
+  
+  row.names = "RCBD-Temp"
+)
 
 ```
 
 ```{r}
-# Generate 50 RCBD designs with light blocks for heirloom only
-rcbd_light_heirloom <- generate_rcbd_lightblock(n_designs = 50, formula = formula_heirloom, plant_type = "heirloom")
+# Generate 50 RCBD designs for cherry-only scenario with 3 blocks
+rcbd_cherry <- generate_rcbd_designs(
+  env_data, 
+  n_designs = 50, 
+  formula = formula_cherry, 
+  plant_type_fixed = "cherry", 
+  n_blocks = 3
+)
 
-# Strictly filter: keep only designs with valid and positive D/A/G-optimality
-valid_idx_heirloom <- is.finite(rcbd_light_heirloom$d_opt) &
-                      is.finite(rcbd_light_heirloom$a_opt) & rcbd_light_heirloom$a_opt > 0 &
-                      is.finite(rcbd_light_heirloom$g_opt) & rcbd_light_heirloom$g_opt > 0
+# Identify valid designs
+valid_idx_RCBD_cherry <- is.finite(rcbd_cherry$d_opt) &
+                         is.finite(rcbd_cherry$a_opt) & rcbd_cherry$a_opt > 0 &
+                         is.finite(rcbd_cherry$g_opt) & rcbd_cherry$g_opt > 0
 
-# Extract valid optimality values
-valid_dopt_heirloom <- rcbd_light_heirloom$d_opt[valid_idx_heirloom]
-valid_aopt_heirloom <- rcbd_light_heirloom$a_opt[valid_idx_heirloom]
-valid_gopt_heirloom <- rcbd_light_heirloom$g_opt[valid_idx_heirloom]
+# Extract valid scores
+valid_dopt_RCBD_cherry <- rcbd_cherry$d_opt[valid_idx_RCBD_cherry]
+valid_aopt_RCBD_cherry <- rcbd_cherry$a_opt[valid_idx_RCBD_cherry]
+valid_gopt_RCBD_cherry <- rcbd_cherry$g_opt[valid_idx_RCBD_cherry]
 
-# Use first valid design to get model parameter count
-df_heirloom <- rcbd_light_heirloom$designs[[which(valid_idx_heirloom)[1]]]
-df_heirloom$percent_manure <- as.numeric(as.character(df_heirloom$percent_manure))
-p_heirloom <- ncol(model.matrix(formula_heirloom, data = df_heirloom))
+# Compute efficiencies relative to golden cherry design
+d_eff_rcbd_cherry <- exp(valid_dopt_RCBD_cherry - golden_cherry_D)*100
+a_eff_rcbd_cherry <- golden_cherry_A / valid_aopt_RCBD_cherry*100
+g_eff_rcbd_cherry <- golden_cherry_G / valid_gopt_RCBD_cherry*100
 
-# Calculate D-, A-, G-efficiency for valid designs
-d_eff_heirloom <- exp((valid_dopt_heirloom - best_D_heirloom) / p_heirloom)
-a_eff_heirloom <- best_A_heirloom / valid_aopt_heirloom
-g_eff_heirloom <- best_G_heirloom / valid_gopt_heirloom
+# Summarize average efficiencies for cherry-only RCBD
+mean_table_rcbd_cherry <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_rcbd_cherry, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_rcbd_cherry, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_rcbd_cherry, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_rcbd_cherry, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_rcbd_cherry, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_rcbd_cherry, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_rcbd_cherry, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_rcbd_cherry, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_rcbd_cherry, na.rm = TRUE),
+  
+  row.names = "RCBD-Cherry"
+)
 
-# Plot the three efficiency boxplots in a single row
-par(mfrow = c(1, 3))
-boxplot(d_eff_heirloom,
-        main = "D-efficiency:Heirloom(RCBD-Light)",
-        ylab = "Relative Information",
-        col = "lightblue",
-        border = "blue")
-boxplot(a_eff_heirloom,
-        main = "A-efficiency:Heirloom(RCBD-Light)",
-        ylab = "Relative Efficiency",
-        col = "lightgreen",
-        border = "darkgreen")
-boxplot(g_eff_heirloom,
-        main = "G-efficiency:Heirloom(RCBD-Light)",
-        ylab = "Relative Efficiency",
-        col = "pink",
-        border = "red")
-par(mfrow = c(1, 1))
 ```
+
+```{r}
+# Generate 50 RCBD designs for heirloom-only scenario with 3 blocks
+rcbd_heirloom <- generate_rcbd_designs(
+  env_data, 
+  n_designs = 50, 
+  formula = formula_heirloom,  
+  plant_type_fixed = "heirloom", 
+  n_blocks = 3
+)
+
+# Identify valid designs
+valid_idx_RCBD_heirloom <- is.finite(rcbd_heirloom$d_opt) &
+                           is.finite(rcbd_heirloom$a_opt) & rcbd_heirloom$a_opt > 0 &
+                           is.finite(rcbd_heirloom$g_opt) & rcbd_heirloom$g_opt > 0
+
+# Extract valid scores
+valid_dopt_RCBD_heirloom <- rcbd_heirloom$d_opt[valid_idx_RCBD_heirloom]
+valid_aopt_RCBD_heirloom <- rcbd_heirloom$a_opt[valid_idx_RCBD_heirloom]
+valid_gopt_RCBD_heirloom <- rcbd_heirloom$g_opt[valid_idx_RCBD_heirloom]
+
+# Compute efficiencies relative to golden heirloom design
+d_eff_rcbd_heirloom <- exp(valid_dopt_RCBD_heirloom - golden_heirloom_D)*100
+a_eff_rcbd_heirloom <- golden_heirloom_A / valid_aopt_RCBD_heirloom*100
+g_eff_rcbd_heirloom <- golden_heirloom_G / valid_gopt_RCBD_heirloom*100
+
+# Summarize average efficiencies for heirloom-only RCBD
+mean_table_rcbd_heirloom <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_rcbd_heirloom, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_rcbd_heirloom, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_rcbd_heirloom, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_rcbd_heirloom, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_rcbd_heirloom, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_rcbd_heirloom, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_rcbd_heirloom, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_rcbd_heirloom, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_rcbd_heirloom, na.rm = TRUE),
+  
+  row.names = "RCBD-Heirloom"
+)
+
+```
+
+```{r}
+# Combine efficiency summaries from cherry, heirloom, and mixed RCBDs
+mean_table_all <- rbind(
+  mean_table_rcbd_cherry,
+  mean_table_rcbd_heirloom,
+  mean_table_rcbd
+)
+
+# Display summarized results for all RCBD scenarios
+mean_table_all
+
+```
+
+
+```{r}
+# Function to generate multiple RCBD designs using PPFD as blocks
+generate_rcbd_lightblock <- function(env_data,
+                                     n_designs = 100,
+                                     formula,
+                                     plant_type_fixed = c("cherry", "heirloom"),
+                                     n_blocks = 3) {
+  
+  # Create a block map by dividing PPFD values into n_blocks
+  block_map <- data.frame(
+    idx = which(!is.na(env_data$PPFD)),
+    PPFD = env_data$PPFD[!is.na(env_data$PPFD)],
+    block = cut(env_data$PPFD[!is.na(env_data$PPFD)], breaks = n_blocks, labels = FALSE)
+  )
+  unique_blocks <- unique(block_map$block)
+
+  # Initialize storage for designs and optimality scores
+  designs <- vector("list", n_designs)
+  dopt <- numeric(n_designs)
+  aopt <- numeric(n_designs)
+  gopt <- numeric(n_designs)
+
+  set.seed(123)
+  for (i in seq_len(n_designs)) {
+    # Randomly select 5 manure levels including 0
+    manure_levels <- c(0, sample(1:100, 4, replace = FALSE))
+    
+    # Create all treatment combinations of manure × plant type
+    trt_combos <- expand.grid(
+      percent_manure = manure_levels,
+      plant_type = plant_type_fixed,
+      stringsAsFactors = FALSE
+    )
+    n_treatments <- nrow(trt_combos)
+    
+    # Initialize design data frame
+    design_df <- data.frame()
+    
+    # Assign treatments within each light block
+    for (b in unique_blocks) {
+      block_units <- block_map$idx[block_map$block == b]
+      if (length(block_units) < n_treatments) next
+      
+      chosen_idx <- sample(block_units, n_treatments, replace = FALSE)
+      df_block <- env_data[chosen_idx, ]
+      
+      # Randomize the treatment order within the block
+      trt_df <- trt_combos[sample(n_treatments), ]
+      df_block$percent_manure <- trt_df$percent_manure
+      df_block$plant_type <- factor(trt_df$plant_type, levels = c("cherry", "heirloom"))
+      df_block$block <- factor(b)
+      
+      design_df <- rbind(design_df, df_block)
+    }
+    
+    if (nrow(design_df) == 0) next
+    
+    # Compute optimality scores for the generated design
+    dopt[i] <- tryCatch(compute_d_optimality(design_df, formula), error = function(e) NA)
+    aopt[i] <- tryCatch(compute_a_optimality(design_df, formula), error = function(e) NA)
+    gopt[i] <- tryCatch(compute_g_optimality(design_df, formula), error = function(e) NA)
+    
+    # Store the completed design
+    designs[[i]] <- design_df
+  }
+  
+  # Return all designs and their scores
+  list(
+    designs = designs,
+    d_opt = dopt,
+    a_opt = aopt,
+    g_opt = gopt
+  )
+}
+
+```
+
+```{r}
+# Generate 50 mixed-variety RCBD designs with 2 PPFD blocks
+rcbd_light <- generate_rcbd_lightblock(env_data, n_designs = 100, formula = best_formula, n_blocks = 2)
+
+# Identify valid designs with finite and positive scores
+valid_idx_light <- is.finite(rcbd_light$d_opt) &
+                   is.finite(rcbd_light$a_opt) & rcbd_light$a_opt > 0 &
+                   is.finite(rcbd_light$g_opt) & rcbd_light$g_opt > 0
+
+# Extract valid scores
+valid_dopt_light <- rcbd_light$d_opt[valid_idx_light]
+valid_aopt_light <- rcbd_light$a_opt[valid_idx_light]
+valid_gopt_light <- rcbd_light$g_opt[valid_idx_light]
+
+# Compute efficiencies relative to golden mixed design
+d_eff_light <- exp(valid_dopt_light - golden_mixed_D)*100
+a_eff_light <- golden_mixed_A / valid_aopt_light*100
+g_eff_light <- golden_mixed_G / valid_gopt_light*100
+
+# Summarize average efficiencies for mixed RCBD (light blocks)
+mean_table_light <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_light, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_light, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_light, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_light, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_light, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_light, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_light, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_light, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_light, na.rm = TRUE),
+  
+  row.names = "RCBD-Light"
+)
+
+```
+
+```{r}
+# Generate 50 cherry-only RCBD designs with PPFD as blocks
+rcbd_light_cherry <- generate_rcbd_lightblock(
+  env_data, 
+  n_designs = 100, 
+  formula = formula_cherry, 
+  plant_type_fixed = "cherry", 
+  n_blocks = 6
+)
+
+# Identify valid designs
+valid_idx_light_cherry <- is.finite(rcbd_light_cherry$d_opt) &
+                          is.finite(rcbd_light_cherry$a_opt) & rcbd_light_cherry$a_opt > 0 &
+                          is.finite(rcbd_light_cherry$g_opt) & rcbd_light_cherry$g_opt > 0
+
+# Extract valid scores
+valid_dopt_light_cherry <- rcbd_light_cherry$d_opt[valid_idx_light_cherry]
+valid_aopt_light_cherry <- rcbd_light_cherry$a_opt[valid_idx_light_cherry]
+valid_gopt_light_cherry <- rcbd_light_cherry$g_opt[valid_idx_light_cherry]
+
+# Compute efficiencies relative to golden cherry design
+d_eff_light_cherry <- exp(valid_dopt_light_cherry - golden_cherry_D)*100
+a_eff_light_cherry <- golden_cherry_A / valid_aopt_light_cherry*100
+g_eff_light_cherry <- golden_cherry_G / valid_gopt_light_cherry*100
+
+# Summarize average efficiencies for cherry-only RCBD (light blocks)
+mean_table_light_cherry <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_light_cherry, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_light_cherry, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_light_cherry, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_light_cherry, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_light_cherry, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_light_cherry, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_light_cherry, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_light_cherry, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_light_cherry, na.rm = TRUE),
+  
+  row.names = "RCBD-Light-Cherry"
+)
+```
+
+```{r}
+# Generate 50 heirloom-only RCBD designs with PPFD as blocks
+rcbd_light_heirloom <- generate_rcbd_lightblock(
+  env_data, 
+  n_designs = 100, 
+  formula = formula_heirloom, 
+  plant_type_fixed = "heirloom", 
+  n_blocks = 6
+)
+
+# Identify valid designs
+valid_idx_light_heirloom <- is.finite(rcbd_light_heirloom$d_opt) &
+                            is.finite(rcbd_light_heirloom$a_opt) & rcbd_light_heirloom$a_opt > 0 &
+                            is.finite(rcbd_light_heirloom$g_opt) & rcbd_light_heirloom$g_opt > 0
+
+# Extract valid scores
+valid_dopt_light_heirloom <- rcbd_light_heirloom$d_opt[valid_idx_light_heirloom]
+valid_aopt_light_heirloom <- rcbd_light_heirloom$a_opt[valid_idx_light_heirloom]
+valid_gopt_light_heirloom <- rcbd_light_heirloom$g_opt[valid_idx_light_heirloom]
+
+# Compute efficiencies relative to golden heirloom design
+d_eff_light_heirloom <- exp(valid_dopt_light_heirloom - golden_heirloom_D)*100
+a_eff_light_heirloom <- golden_heirloom_A / valid_aopt_light_heirloom*100
+g_eff_light_heirloom <- golden_heirloom_G / valid_gopt_light_heirloom*100
+
+# Summarize average efficiencies for heirloom-only RCBD (light blocks)
+mean_table_light_heirloom <- data.frame(
+  "D-efficiency (mean)" = mean(d_eff_light_heirloom, na.rm = TRUE),
+  "D-efficiency (min)"  = min(d_eff_light_heirloom, na.rm = TRUE),
+  "D-efficiency (max)"  = max(d_eff_light_heirloom, na.rm = TRUE),
+  
+  "A-efficiency (mean)" = mean(a_eff_light_heirloom, na.rm = TRUE),
+  "A-efficiency (min)"  = min(a_eff_light_heirloom, na.rm = TRUE),
+  "A-efficiency (max)"  = max(a_eff_light_heirloom, na.rm = TRUE),
+  
+  "G-efficiency (mean)" = mean(g_eff_light_heirloom, na.rm = TRUE),
+  "G-efficiency (min)"  = min(g_eff_light_heirloom, na.rm = TRUE),
+  "G-efficiency (max)"  = max(g_eff_light_heirloom, na.rm = TRUE),
+  
+  row.names = "RCBD-Light-Heirloom"
+)
+
+```
+
+```{r}
+# Combine efficiency summaries from cherry, heirloom, and mixed RCBD (light blocks)
+mean_table_light_all <- rbind(
+  mean_table_light_cherry,
+  mean_table_light_heirloom,
+  mean_table_light
+)
+
+# Display summarized results
+mean_table_light_all
+
+```
+
+```{r}
+# Define the percentage range of manure from 0% to 100%
+perc <- 0:100
+
+# Define yield response functions for cherry and heirloom tomatoes
+func <- function(x, type = "cherry") {
+  if (type == "cherry") {
+    res = (3/5)*x - (1/175)*x^2          # quadratic response for cherry
+  } else if (type == "heirloom") {
+    res = 4*sqrt(x) - (1/3)*x            # square-root response for heirloom
+  }
+  return(res)
+}
+
+# Create a data frame of manure percentage vs. expected yield for both types
+data <- data.frame(
+  Percentage = rep(perc, 2),
+  value = c(func(perc), func(perc, "heirloom")),
+  Type = rep(c("Cherry", "Heirloom"), each = length(perc))
+)
+
+# Define threshold ranges for cherry yield:
+Cherry_thrived <- range(perc[which(func(perc, "cherry") > 15.5)])   # thriving yield range
+Cherry_survived <- range(perc[which(func(perc, "cherry") > 13)])    # survival yield range
+
+# Define threshold ranges for heirloom yield:
+Heirloom_thrived <- range(perc[which(func(perc, "heirloom") > 11.5)])  # thriving yield range
+Heirloom_survived <- range(perc[which(func(perc, "heirloom") > 10)])   # survival yield range
+
+```
+
+```{r}
+# Function to check whether a design's manure levels fall fully within the "thrived" range
+check_thrived  <- function(design, scenario) {
+  # Convert percent_manure values to numeric and remove zeros
+  values <- suppressWarnings(as.numeric(as.character(design$percent_manure)))
+  values <- values[values != 0]
+
+  # For cherry-only scenario: check if all values fall within cherry thrived range
+  if (scenario == "cherry-only") {
+    all(values >= Cherry_thrived[1] & values <= Cherry_thrived[2], na.rm = TRUE)
+
+  # For heirloom-only scenario: check if all values fall within heirloom thrived range
+  } else if (scenario == "heirloom-only") {
+    all(values >= Heirloom_thrived[1] & values <= Heirloom_thrived[2], na.rm = TRUE)
+
+  # For mixed scenario: check if all values fall within either cherry or heirloom thrived ranges
+  } else if (scenario == "mixed") {
+    all(values >= Cherry_thrived[1] & values <= Cherry_thrived[2], na.rm = TRUE) ||
+    all(values >= Heirloom_thrived[1] & values <= Heirloom_thrived[2], na.rm = TRUE)
+
+  # Default case: return FALSE if scenario is invalid
+  } else {
+    FALSE
+  }
+}
+
+
+# Build a list of data frames summarizing thrived checks and efficiencies for all scenarios
+thrived_list <- lapply(names(all_designs), function(scenario_name) {
+  designs <- all_designs[[scenario_name]]               # Extract designs for the scenario
+  opt_results <- optimality_results[[scenario_name]]    # Extract optimality results for the scenario
+
+  # Construct summary table with thrived status and optimality efficiencies
+  data.frame(
+    Design_ID = seq_along(designs),                                                  # Design identifier
+    has_thrived_all = sapply(designs, function(design) check_thrived(design, scenario_name)), # Thrived check
+    D_efficiency = sapply(opt_results, function(res) res$Efficiency$D_efficiency),   # D-efficiency
+    A_efficiency = sapply(opt_results, function(res) res$Efficiency$A_efficiency),   # A-efficiency
+    G_efficiency = sapply(opt_results, function(res) res$Efficiency$G_efficiency)    # G-efficiency
+  )
+}) %>% setNames(names(all_designs))   # Assign scenario names to the list
+
+
+```
+
+```{r}
+# Build summary tables of thrived status vs. mean efficiencies for each scenario
+thrived_summary_tables <- lapply(names(thrived_list), function(name) {
+  thrived_list[[name]] %>%
+    # Group designs by whether they fully meet the thrived condition
+    group_by(has_thrived_all) %>%
+    # Compute average D-, A-, and G-efficiency within each group
+    summarise(
+      mean_D = mean(D_efficiency, na.rm = TRUE),
+      mean_A = mean(A_efficiency, na.rm = TRUE),
+      mean_G = mean(G_efficiency, na.rm = TRUE),
+      # Count how many designs had complete efficiency values
+      n = sum(!is.na(D_efficiency) & !is.na(A_efficiency) & !is.na(G_efficiency)),
+      .groups = "drop"
+    )
+}) %>% setNames(names(thrived_list))   # Assign scenario names to the summary tables
+
+```
+
+```{r}
+thrived_summary_tables[["mixed"]]
+```
+
+```{r}
+thrived_summary_tables[["cherry-only"]]
+```
+
+```{r}
+thrived_summary_tables[["heirloom-only"]]
+```
+
+```{r}
+# Function to check whether a design's manure levels fall fully within the "survived" range
+check_survived <- function(design, scenario) {
+  # Convert percent_manure values to numeric and remove zeros
+  values <- suppressWarnings(as.numeric(as.character(design$percent_manure)))
+  values <- values[values != 0]
+
+  # For cherry-only scenario: check if all values fall within cherry survived range
+  if (scenario == "cherry-only") {
+    all(values >= Cherry_survived[1] & values <= Cherry_survived[2], na.rm = TRUE)
+
+  # For heirloom-only scenario: check if all values fall within heirloom survived range
+  } else if (scenario == "heirloom-only") {
+    all(values >= Heirloom_survived[1] & values <= Heirloom_survived[2], na.rm = TRUE)
+
+  # For mixed scenario: check if all values fall within either cherry or heirloom survived ranges
+  } else if (scenario == "mixed") {
+    all(values >= Cherry_survived[1] & values <= Cherry_survived[2], na.rm = TRUE) ||
+    all(values >= Heirloom_survived[1] & values <= Heirloom_survived[2], na.rm = TRUE)
+
+  # Default case: return FALSE if scenario is invalid
+  } else {
+    FALSE
+  }
+}
+
+
+# Build a list of data frames summarizing survived checks and efficiencies for all scenarios
+survived_list <- lapply(names(all_designs), function(scenario_name) {
+  designs <- all_designs[[scenario_name]]               # Extract designs for the scenario
+  opt_results <- optimality_results[[scenario_name]]    # Extract optimality results for the scenario
+
+  # Construct summary table with survived status and optimality efficiencies
+  data.frame(
+    Design_ID = seq_along(designs),                                                  # Design identifier
+    has_survived_all = sapply(designs, function(design) check_survived(design, scenario_name)), # Survived check
+    D_efficiency = sapply(opt_results, function(res) res$Efficiency$D_efficiency),   # D-efficiency
+    A_efficiency = sapply(opt_results, function(res) res$Efficiency$A_efficiency),   # A-efficiency
+    G_efficiency = sapply(opt_results, function(res) res$Efficiency$G_efficiency)    # G-efficiency
+  )
+}) %>% setNames(names(all_designs))   # Assign scenario names to the list
+
+
+# Summarize mean efficiencies grouped by survived status for each scenario
+survived_summary_tables <- lapply(names(survived_list), function(name) {
+  survived_list[[name]] %>%
+    # Group designs by whether they fully meet the survived condition
+    group_by(has_survived_all) %>%
+    # Compute mean efficiency values within each group
+    summarise(
+      mean_D = mean(D_efficiency, na.rm = TRUE),
+      mean_A = mean(A_efficiency, na.rm = TRUE),
+      mean_G = mean(G_efficiency, na.rm = TRUE),
+      # Count designs with complete efficiency values
+      n = sum(!is.na(D_efficiency) & !is.na(A_efficiency) & !is.na(G_efficiency)),
+      .groups = "drop"
+    )
+}) %>% setNames(names(survived_list))   # Assign scenario names to the summary tables
+
+
+```
+
+
+```{r}
+survived_summary_tables[["mixed"]]
+```
+
+```{r}
+survived_summary_tables[["cherry-only"]]
+```
+
+```{r}
+survived_summary_tables[["heirloom-only"]]
+```
+
+
+
+
