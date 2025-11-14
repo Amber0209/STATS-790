@@ -311,7 +311,11 @@ for (scenario_name in names(all_designs)) {
 
 ```{r}
 # Inspect the results of the 5th cherry-only candidate design
-result_example <- optimality_results[["cherry-only"]][[12]]
+#result_example <- optimality_results[["heirloom-only"]][[9]] #Good
+#result_example <- optimality_results[["heirloom-only"]][[27]]  #Moderate
+result_example <- optimality_results[["heirloom-only"]][[46]] #Poor #459
+#result_example <- optimality_results[["cherry-only"]][[12]]
+#result_example <- optimality_results[["mixed"]][[26]]
 result_example
 ```
 
@@ -374,7 +378,9 @@ par(op)
 
 ```{r}
 # Extract the fifth cherry-only design from the list
-df <- cherry_designs[[12]]
+#df <- cherry_designs[[12]]
+df <- heirloom_designs[[46]]
+#df <- mixed_designs[[26]]
 
 # Create a factor for fertilizer level, with "Empty" for unused plots
 # - ifelse: set to "Empty" if percent_manure is NA; otherwise, use manure value as string
@@ -509,7 +515,7 @@ generate_design_feedback <- function(result, student_df = NULL, env_data = NULL)
 #' @param threshold    Cut-off above which a variance ratio is flagged as problematic (default = 1.3).
 #' @return             A character vector of feedback suggestions, or NULL if no issues detected.
 
-generate_DA_design_feedback <- function(opt_result, threshold = 1.3) {
+generate_DA_design_feedback <- function(opt_result, threshold = 1.5) {
   
   # --- Step 1: Extract variance ratios and identify flagged variables
   var_ratio <- opt_result$D$VarianceRatio
@@ -600,7 +606,7 @@ generate_DA_design_feedback <- function(opt_result, threshold = 1.3) {
   # Generate feedback for flagged interactions
   interaction_suggestions <- character(0)
   if (length(flagged_interactions) > 0) {
-    interaction_suggestions <- make_interaction_suggestion(flagged_interactions)
+    interaction_suggestions <- make_interaction_suggestion(simplified_interactions)
   }
   
   # --- Step 5: High-level factor-based feedback
@@ -663,7 +669,7 @@ generate_DA_design_feedback <- function(opt_result, threshold = 1.3) {
 #'         or a simple message if no issues are found.
 
 generate_G_design_feedback <- function(opt_result, student_df, env_data,
-                                       threshold = 1.3, k_isolated = 2, top_n = 3) {
+                                       threshold = 1.5, k_isolated = 2, top_n = 3) {
   # --- Step 1: Extract prediction variance ratios (student vs gold)
   pred_ratio <- opt_result$G$PredictionVarianceRatio
   
@@ -761,9 +767,8 @@ generate_G_design_feedback <- function(opt_result, student_df, env_data,
 ```
 
 
-
 ```{r}
-generate_design_feedback(result_example, all_designs[["cherry-only"]][[12]], env_data)
+generate_design_feedback(result_example, all_designs[["heirloom-only"]][[46]], env_data)
 ```
 
 ```{r}
@@ -841,7 +846,7 @@ analyze_all_scenarios <- function(optimality_results, threshold = 1.3) {
 }
 
 # Set the threshold and run the full analysis
-threshold <- 1.3
+threshold <- 1.5
 summary_result <- analyze_all_scenarios(optimality_results, threshold = threshold)
 
 # Print summary table
