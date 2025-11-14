@@ -4,7 +4,7 @@ This repository contains the source code and analysis files for studying tomato 
 
 ## Contents
 
-### **tomgro.Rmd**
+### **tomgro.R**
 This R Markdown file implements a reduced tomato growth model adapted from Jones (1991, 1999).
 - The core physiological functions (node initiation, LAI expansion, biomass and fruit growth) were provided by the supervisor.
 - The model simulates daily temperature and PPFD to produce plant, fruit, and mature fruit dry weights across a 90-day cycle.
