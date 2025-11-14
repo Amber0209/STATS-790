@@ -9,8 +9,8 @@ This R Markdown file implements a reduced tomato growth model adapted from Jones
 - The core physiological functions (node initiation, LAI expansion, biomass and fruit growth) were provided by the supervisor.
 - The model simulates daily temperature and PPFD to produce plant, fruit, and mature fruit dry weights across a 90-day cycle.
 - The file is used to generate plots that illustrate growth trajectories and environmental responses.
-- The tomgro() function applies the model to full 7×7 greenhouse designs, producing results for all plots.
-- The tomgro_single() function (written by me) provides a simplified wrapper for simulating a single plant under mean environmental conditions and a chosen manure level.
+- The `tomgro()` function applies the model to full 7×7 greenhouse designs, producing results for all plots.
+- The `tomgro_single()` function (written by me) provides a simplified wrapper for simulating a single plant under mean environmental conditions and a chosen manure level.
 
 ### **State_variable.Rmd**
 This R Markdown file demonstrates a single-run simulation of tomato growth using the `tomgro_single()` function from `tomgro.r`.  
