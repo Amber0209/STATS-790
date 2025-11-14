@@ -12,6 +12,7 @@ library(tibble)
 library(dplyr)
 library(MuMIn)
 library(MASS)
+library(tidyverse)
 ```
 
 ```{r}
@@ -669,10 +670,37 @@ CRD_mean_summary
 
 ```
 
+```{r}
+# ---- Hard-code CRD efficiency results ----
+df <- tribble(
+  ~Criterion, ~Design,    ~Mean,   ~Min,    ~Max,
+  "D-optimality efficiency",        "Cherry",   50.30, 17.76, 111.32,
+  "D-optimality efficiency",        "Heirloom", 63.26, 20.76, 112.00,
+  "D-optimality efficiency",        "Mixed",    49.97, 19.75,  83.58,
+  "A-optimality efficiency",        "Cherry",   66.37, 17.01,  87.70,
+  "A-optimality efficiency",        "Heirloom", 62.54, 20.54,  93.37,
+  "A-optimality efficiency",        "Mixed",    44.70, 28.70,  81.80,
+  "G-optimality efficiency",        "Cherry",   79.19, 66.47,  88.44,
+  "G-optimality efficiency",        "Heirloom", 78.83, 66.01, 101.05,
+  "G-optimality efficiency",        "Mixed",    69.37, 55.66,  93.11
+)
+
+ggplot(df, aes(x = Design, y = Mean)) +
+  geom_pointrange(aes(ymin = Min, ymax = Max), 
+                  fatten = 2, size = 0.5) +
+  facet_wrap(~ Criterion, nrow = 1, scales = "free_y") +
+  labs(
+    title = "CRD Efficiency Relative to Gold Standard",
+    y = "Efficiency", x = NULL
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
 
 ```{r}
 # Function to generate multiple Randomized Complete Block Designs (RCBDs)
-generate_rcbd_designs <- function(env_data, n_designs = 100, formula,
+generate_rcbd_Tempblock  <- function(env_data, n_designs = 100, formula,
                                   plant_type_fixed = c("cherry", "heirloom"),
                                   n_blocks = NULL) {
   
@@ -747,7 +775,7 @@ generate_rcbd_designs <- function(env_data, n_designs = 100, formula,
 
 ```{r}
 # Generate 50 mixed-variety RCBD designs with 2 blocks
-rcbd_result <- generate_rcbd_designs(env_data, n_designs = 100, formula = best_formula, n_blocks = 2)
+rcbd_result <- generate_rcbd_Tempblock(env_data, n_designs = 100, formula = best_formula, n_blocks = 2)
 
 # Identify valid designs with finite and positive scores
 valid_idx_RCBD <- is.finite(rcbd_result$d_opt) &
@@ -778,14 +806,14 @@ mean_table_rcbd <- data.frame(
   "G-efficiency (min)"  = min(g_eff_rcbd, na.rm = TRUE),
   "G-efficiency (max)"  = max(g_eff_rcbd, na.rm = TRUE),
   
-  row.names = "RCBD-Temp"
+  row.names = "RCBD-Temp-Mixed"
 )
 
 ```
 
 ```{r}
 # Generate 50 RCBD designs for cherry-only scenario with 3 blocks
-rcbd_cherry <- generate_rcbd_designs(
+rcbd_cherry <- generate_rcbd_Tempblock(
   env_data, 
   n_designs = 50, 
   formula = formula_cherry, 
@@ -822,14 +850,14 @@ mean_table_rcbd_cherry <- data.frame(
   "G-efficiency (min)"  = min(g_eff_rcbd_cherry, na.rm = TRUE),
   "G-efficiency (max)"  = max(g_eff_rcbd_cherry, na.rm = TRUE),
   
-  row.names = "RCBD-Cherry"
+  row.names = "RCBD-Temp-Cherry"
 )
 
 ```
 
 ```{r}
 # Generate 50 RCBD designs for heirloom-only scenario with 3 blocks
-rcbd_heirloom <- generate_rcbd_designs(
+rcbd_heirloom <- generate_rcbd_Tempblock(
   env_data, 
   n_designs = 50, 
   formula = formula_heirloom,  
@@ -866,7 +894,7 @@ mean_table_rcbd_heirloom <- data.frame(
   "G-efficiency (min)"  = min(g_eff_rcbd_heirloom, na.rm = TRUE),
   "G-efficiency (max)"  = max(g_eff_rcbd_heirloom, na.rm = TRUE),
   
-  row.names = "RCBD-Heirloom"
+  row.names = "RCBD-Temp-Heirloom"
 )
 
 ```
@@ -884,6 +912,39 @@ mean_table_all
 
 ```
 
+```{r}
+# ---- Hard-code RCBD temperature block efficiency results ----
+df_rcbd <- tribble(
+  ~Criterion, ~Design,          ~Mean,   ~Min,   ~Max,
+  "D-optimality efficiency",        "Cherry",    30.95,   28.98,  32.92,
+  "D-optimality efficiency",        "Heirloom",  33.21,   28.11,  37.00,
+  "D-optimality efficiency",        "Mixed",     36.66,   21.79,  54.50,
+  "A-optimality efficiency",        "Cherry",    41.83,   36.69,  46.97,
+  "A-optimality efficiency",        "Heirloom",  38.12,   31.09,  45.51,
+  "A-optimality efficiency",        "Mixed",     27.57,   18.65,  54.72,
+  "G-optimality efficiency",        "Cherry",    66.05,   65.52,  66.58,
+  "G-optimality efficiency",        "Heirloom",  65.18,   64.39,  74.94,
+  "G-optimality efficiency",        "Mixed",     67.94,   64.58,  74.70
+)
+
+# ---- Plot: point-range (mean + min/max) ----
+p <- ggplot(df_rcbd, aes(x = Design, y = Mean)) +
+  geom_pointrange(aes(ymin = Min, ymax = Max),
+                  fatten = 2, size = 0.5) +
+  facet_wrap(~ Criterion, nrow = 1, scales = "free_y") +
+  labs(
+    title = "RCBD (Temperatur Blocks) Efficiency Relative to Gold Standard",
+    x = NULL,
+    y = "Efficiency"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 20, hjust = 1)
+  )
+
+p
+
+```
 
 ```{r}
 # Function to generate multiple RCBD designs using PPFD as blocks
@@ -964,7 +1025,7 @@ generate_rcbd_lightblock <- function(env_data,
 
 ```{r}
 # Generate 50 mixed-variety RCBD designs with 2 PPFD blocks
-rcbd_light <- generate_rcbd_lightblock(env_data, n_designs = 100, formula = best_formula, n_blocks = 2)
+rcbd_light <- generate_rcbd_lightblock(env_data, n_designs = 100, formula = best_formula, n_blocks = 3)
 
 # Identify valid designs with finite and positive scores
 valid_idx_light <- is.finite(rcbd_light$d_opt) &
@@ -1097,6 +1158,41 @@ mean_table_light_all <- rbind(
 
 # Display summarized results
 mean_table_light_all
+
+```
+
+```{r}
+
+# ---- Hard-code PPFD-based RCBD efficiency results ----
+df_ppfd <- tribble(
+  ~Criterion, ~Design,          ~Mean,   ~Min,   ~Max,
+  "D-optimality efficiency",        "Cherry",    48.51,   37.55,  63.73,
+  "D-optimality efficiency",        "Heirloom",  49.94,   36.69,  76.73,
+  "D-optimality efficiency",        "Mixed",     38.75,   24.26,  54.38,
+  "A-optimality efficiency",        "Cherry",    51.43,   41.89,  63.88,
+  "A-optimality efficiency",        "Heirloom",  55.78,   43.44,  68.02,
+  "A-optimality efficiency",        "Mixed",     37.18,   18.50,  57.95,
+  "G-optimality efficiency",        "Cherry",    76.39,   68.09,  87.98,
+  "G-optimality efficiency",        "Heirloom",  85.24,   76.74,  99.12,
+  "G-optimality efficiency",        "Mixed",     69.28,   68.29,  72.53
+)
+
+# ---- Plot: point-range (mean + min/max) ----
+p_ppfd <- ggplot(df_ppfd, aes(x = Design, y = Mean)) +
+  geom_pointrange(aes(ymin = Min, ymax = Max),
+                  fatten = 2, size = 0.5) +
+  facet_wrap(~ Criterion, nrow = 1, scales = "free_y") +
+  labs(
+    title = "RCBD (PPFD Blocks) Efficiency Relative to Gold Standard",
+    x = NULL,
+    y = "Efficiency"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 20, hjust = 1)
+  )
+
+p_ppfd
 
 ```
 
