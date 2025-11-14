@@ -10,25 +10,56 @@ knitr::opts_chunk$set(echo = TRUE)
 source("tomgro.r")
 library(ggplot2)
 library(tidyr)
+library(dplyr)
 ```
 
 ```{r}
+## --- Run the single-plant simulator ----------------------------------------
+## Simulate one tomato plant (cherry type) grown for 90 days
+## under specified mean temperature, light, and manure conditions.
 sim <- tomgro_single(
-  T_mean        = 28,       
-  PPFD_mean     = 150,      
+  T_mean        = 25,       
+  PPFD_mean     = 200,      
   percent_manure = 55,       
   plant_type    = "cherry"   
 )
-colnames(sim)[5:9] <- c("W", "Wf", "Wm", "LAI", "N")
+colnames(sim)[8:12] <- c("LAI", "W", "WF", "WM", "N")
 sim$Day <- 1:nrow(sim)
-
 ```
 
 ```{r}
+## --- Reshape data for plotting --------------------------------------------
+## Convert the dataset from wide format to long format (pivot_longer)
+## This makes it easier to facet multiple growth variables in ggplot.
 plot_df <- sim %>%
-  pivot_longer(cols = c(W, Wf, Wm, LAI, N),
-               names_to = "Variable",
-               values_to = "Value")
+  pivot_longer(
+    cols = c(W, WF, WM, LAI, N),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Variable = recode(Variable,
+                      "W"   = "Total Dry Weight",
+                      "WF"  = "Fruit Dry Weight",
+                      "WM"  = "Mature Fruit Weight",
+                      "LAI" = "Leaf Area Index",
+                      "N"   = "Node Number"),
+    Variable = factor(
+      Variable,
+      levels = c(
+        "Total Dry Weight",
+        "Fruit Dry Weight",
+        "Mature Fruit Weight",
+        "Leaf Area Index",
+        "Node Number"
+      )
+    )
+  )
+
+## --- Plot the growth curves -----------------------------------------------
+## Each state variable is plotted on a different facet with free y-scales.
+## This shows the growth trajectory for all major physiological components.
+
 
 ggplot(plot_df, aes(x = Day, y = Value)) +
   geom_line(color = "darkblue", size = 1) +
@@ -38,7 +69,11 @@ ggplot(plot_df, aes(x = Day, y = Value)) +
     x = "Day",
     y = "Value"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 13) +
+  theme(
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
 
 ```
 
