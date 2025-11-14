@@ -41,8 +41,32 @@ This R Markdown file documents the process of generating feedback for student ex
 - Identifies weaknesses such as limited treatment coverage or isolated plots through variance ratio and prediction diagnostics.
 - Includes code to safely extract variance-ratio vectors and evaluate whether D- and A-optimality identify the same problematic variables (strict match checking). 
 - Translates diagnostic results into **student-friendly suggestions**, linking statistical efficiency losses to concrete greenhouse factors (fertilizer, temperature, light, plant type).  
-- Demonstrates the end-to-end feedback pipeline, from input design to optimality computation and final suggestions, with flowcharts and worked examples.  
+- Demonstrates the end-to-end feedback pipeline, from input design to optimality computation and final suggestions, with flowcharts and worked examples.
 
+### **env_data.RData**
+- Contains the greenhouse environmental gradients used in the Tomato Trials simulation.
+- Includes the row-wise temperature pattern, column-wise PPFD (light) pattern, and path locations.
+- Used for modelling growth conditions and for constructing environment-based blocks.
+
+### **formula.RData**
+- Stores the best‐fitting statistical models for the three design scenarios: cherry, heirloom, and mixed.
+- These models serve as benchmark formulations for evaluating design efficiency.
+- Used when computing D-, A-, and G-optimality for student and simulated designs.
+
+### **golden_df.RData**
+- Contains the gold standard experimental designs for all three scenarios.
+- Each dataset includes the full 7×7 layout, treatment assignments, and any blocking structure.
+- Used as the reference design when comparing efficiency across strategies.
+
+### **golden_optimality.RData**
+- Provides the optimality results (D-, A-, G-) for each gold standard design.
+- These values serve as benchmark efficiency targets for evaluating other designs.
+- Used extensively in the efficiency comparison chapter and feedback system.
+
+### **simulation_design.RData**
+- Includes 1,000 randomly generated designs for each of the three scenarios.
+- Each design contains a 7×7 layout, treatment assignments, and scenario labels.
+- Used for simulation-based benchmarking and for analysing distributions of design optimality.
 
 ## Getting Started
 
